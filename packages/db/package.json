@@ -1,0 +1,31 @@
+{
+  "name": "@aibos/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./testing": "./test/helpers.ts",
+    "./dev-seed": "./src/seed/dev/seed-dev.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/migrate.ts",
+    "db:seed": "tsx src/seed/run.ts",
+    "db:reset": "tsx src/reset.ts && tsx src/migrate.ts && tsx src/seed/run.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aibos/agent-core": "workspace:*",
+    "@aibos/integration-core": "workspace:*",
+    "@aibos/shared": "workspace:*",
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15"
+  }
+}

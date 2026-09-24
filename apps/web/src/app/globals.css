@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@source "../../../../packages/ui/src";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ── Design tokens ─────────────────────────────────────────────────────────
+   Light is the base; dark is a *selected* set (not an automatic inversion).
+   Series tokens = validated categorical palette, fixed provider order:
+   Claude → OpenAI → Grok → Local. Status colours live in @aibos/ui/status. */
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eceef2;
+  --line: #e2e5eb;
+  --line-strong: #cfd4dd;
+  --fg: #0e1320;
+  --fg-muted: #525b6c;
+  --fg-faint: #7d8697;
+  --accent: #2f5bea;
+  --accent-strong: #2449c7;
+  --accent-soft: #e8eefe;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --shadow-panel: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.03);
+  --grid-dot: rgb(15 23 42 / 0.06);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0c10;
+  --surface: #111419;
+  --surface-2: #161a21;
+  --surface-3: #1e232c;
+  --line: #232833;
+  --line-strong: #323846;
+  --fg: #e8ebf1;
+  --fg-muted: #a0a8b8;
+  --fg-faint: #717a8c;
+  --accent: #5b86ff;
+  --accent-strong: #7a9dff;
+  --accent-soft: #17213d;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --shadow-panel: 0 1px 0 rgb(255 255 255 / 0.02) inset, 0 1px 2px rgb(0 0 0 / 0.3);
+  --grid-dot: rgb(255 255 255 / 0.05);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-faint: var(--fg-faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --shadow-panel: var(--shadow-panel);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  --animate-soft-ping: soft-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-fade-up: fade-up 0.35s ease-out both;
+  --animate-scan: scan 3.2s ease-in-out infinite;
+  --animate-cursor: cursor-path 7s ease-in-out infinite;
+
+  @keyframes soft-ping {
+    75%,
+    100% {
+      transform: scale(2.2);
+      opacity: 0;
+    }
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes scan {
+    0% {
+      transform: translateY(0);
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+    }
+    90% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(var(--scan-distance, 180px));
+      opacity: 0;
+    }
+  }
+  @keyframes cursor-path {
+    0% {
+      transform: translate(18%, 30%);
+    }
+    25% {
+      transform: translate(62%, 22%);
+    }
+    50% {
+      transform: translate(48%, 58%);
+    }
+    75% {
+      transform: translate(22%, 70%);
+    }
+    100% {
+      transform: translate(18%, 30%);
+    }
+  }
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 25%, transparent);
+  }
+}
+
+@layer components {
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
+  }
+  .eyebrow {
+    @apply text-[10.5px] font-semibold uppercase tracking-[0.08em] text-fg-faint;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--surface-3) 0%,
+      var(--surface-2) 50%,
+      var(--surface-3) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .progress-sheen {
+    background-image: linear-gradient(
+      110deg,
+      transparent 30%,
+      rgb(255 255 255 / 0.35) 50%,
+      transparent 70%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2.2s linear infinite;
+  }
+  .dot-grid {
+    background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+    background-size: 14px 14px;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+dialog::backdrop {
+  background: rgb(5 8 15 / 0.55);
+  backdrop-filter: blur(2px);
+}

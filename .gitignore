@@ -1,0 +1,25 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+.turbo/
+
+# env / secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# test artefacts
+test-results/
+playwright-report/
+apps/web/e2e/screenshots/
+
+.DS_Store
+*.log
