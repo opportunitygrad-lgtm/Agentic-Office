@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   createAuditEventSchema,
   type AuditEventDTO,
@@ -26,7 +26,15 @@ export async function recordAuditEvent(
 
 export async function listAuditEvents(
   db: Database,
-  opts: { companyId?: string | null; limit?: number; scope?: AccessScope } = {},
+  opts: {
+    companyId?: string | null;
+    limit?: number;
+    scope?: AccessScope;
+    /** SQL LIKE patterns on the action name (e.g. "knowledge.%"). */
+    actionLike?: readonly string[];
+    outcome?: "success" | "failure";
+    resourceIdIn?: readonly string[];
+  } = {},
 ): Promise<AuditEventDTO[]> {
   const rows = await db
     .select({
@@ -46,6 +54,16 @@ export async function listAuditEvents(
       and(
         opts.companyId ? eq(auditEvents.companyId, opts.companyId) : undefined,
         scopeWhere(auditEvents.companyId, opts.scope ?? FULL_SCOPE),
+        opts.actionLike?.length
+          ? sql`${auditEvents.action} like any (array[${sql.join(
+              opts.actionLike.map((a) => sql`${a}`),
+              sql`, `,
+            )}]::text[])`
+          : undefined,
+        opts.outcome ? eq(auditEvents.outcome, opts.outcome) : undefined,
+        opts.resourceIdIn?.length
+          ? inArray(auditEvents.resourceId, [...opts.resourceIdIn])
+          : undefined,
       ),
     )
     .orderBy(desc(auditEvents.occurredAt))

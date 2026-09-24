@@ -22,6 +22,7 @@
   "dependencies": {
     "@aibos/access-core": "workspace:*",
     "@aibos/agent-core": "workspace:*",
+    "@aibos/context-core": "workspace:*",
     "@aibos/integration-core": "workspace:*",
     "@aibos/shared": "workspace:*",
     "@node-rs/argon2": "^2.2.1",

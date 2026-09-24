@@ -9,6 +9,10 @@ export type {
   Company,
   CompanyMembership,
   AgentPermissionGrant,
+  KnowledgeItem,
+  BrandRule,
+  CommercialRule,
+  ComplianceRule,
 } from "./schema";
 export * from "./repositories/util";
 export * from "./repositories/audit";
@@ -24,4 +28,8 @@ export * from "./repositories/sessions";
 export * from "./repositories/auth";
 export * from "./repositories/roles";
 export * from "./repositories/agent-authority";
+export * from "./repositories/profile";
+export * from "./repositories/knowledge";
+export * from "./repositories/rules";
+export * from "./repositories/context";
 export { syncReferenceData, syncAccessReferenceData } from "./seed/reference";

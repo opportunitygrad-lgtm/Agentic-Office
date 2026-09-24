@@ -20,6 +20,15 @@ const ROUTES = [
   "/settings",
   "/settings/users",
   "/settings/roles",
+  "/settings/knowledge",
+  "/companies/euro-pilot-training",
+  "/companies/euro-pilot-training?tab=business",
+  "/companies/euro-pilot-training?tab=brand",
+  "/companies/opportunitygrad?tab=commercial",
+  "/companies/euro-pilot-training?tab=compliance",
+  "/companies/euro-pilot-training?tab=ai",
+  "/companies/euro-pilot-training?tab=knowledge",
+  "/companies/euro-pilot-training?tab=history",
   "/leads",
 ];
 const WIDTHS = [1920, 1440, 1280, 1024, 768, 390];
@@ -56,9 +65,23 @@ test("sign in, see only permitted companies, sign out", async ({ page }) => {
 test("no horizontal overflow on any page at target widths", async ({ page }) => {
   test.setTimeout(240_000);
   await signIn(page, "owner@aibos.example");
+  const agents = (await (
+    await page.request.get("/api/v1/agents?company=euro-pilot-training")
+  ).json()) as {
+    data: { id: string; name: string }[];
+  };
+  const tasks = (await (
+    await page.request.get("/api/v1/tasks?company=euro-pilot-training")
+  ).json()) as {
+    data: { id: string; title: string }[];
+  };
+  const dynamic = [
+    `/workforce/agents/${agents.data.find((a) => a.name === "EPT Marketing")!.id}`,
+    `/tasks/item/${tasks.data.find((t) => t.title === "Draft partnership introduction emails")!.id}`,
+  ];
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
-    for (const route of ROUTES) {
+    for (const route of [...ROUTES, ...dynamic]) {
       const res = await page.goto(route);
       expect(res?.status(), route).toBe(200);
       const overflow = await page.evaluate(
@@ -74,4 +97,27 @@ test("no horizontal overflow on any page at target widths", async ({ page }) => 
       await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
     ).toBeLessThanOrEqual(0);
   }
+});
+
+test("knowledge library, lifecycle drawer and context preview", async ({ page }) => {
+  await signIn(page, "ept.manager@aibos.example");
+  await page.goto("/companies/euro-pilot-training?tab=knowledge");
+  await expect(page.getByTestId("knowledge-library")).toBeVisible();
+  // RESTRICTED banking details are hidden from a manager without clearance.
+  await expect(page.getByText("Banking and payment details")).toHaveCount(0);
+  await page.getByText("Enquiry reply standards").first().click();
+  const drawer = page.getByTestId("knowledge-drawer");
+  await expect(drawer.getByText("Where did this come from?")).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Edit (new version)" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // Other companies are not reachable by URL manipulation.
+  await page.goto("/companies/pilotsassist");
+  await expect(page.getByRole("heading", { name: "You don't have access" })).toBeVisible();
+  // Task → Agent context shows linked knowledge first, with a reason.
+  await page.goto("/tasks/queue?company=euro-pilot-training");
+  await page.getByRole("link", { name: "Draft partnership introduction emails" }).click();
+  const preview = page.getByTestId("context-preview");
+  await expect(preview.getByText("Flight-school partnership approach")).toBeVisible();
+  await expect(preview.getByText("Explicitly linked to task").first()).toBeVisible();
+  await expect(preview.getByText(/PilotsAssist|Opportunitygrad/)).toHaveCount(0);
 });

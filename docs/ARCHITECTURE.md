@@ -31,19 +31,20 @@ AUDIT LOG                        audit_events (append-only)
 
 ## Repository layout
 
-| Path                        | Responsibility                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`                  | Next.js 16 command centre. Server components fetch the API; `/api/*` is rewritten to the API so the browser is same-origin. |
-| `apps/api`                  | Fastify 5 HTTP API (`/v1/*`, `/health`). Thin: validates with Zod, calls repositories, maps errors.                         |
-| `apps/worker`               | BullMQ workers. Stage 01: heartbeat (drives worker health) and a no-op `agent-tasks` processor.                             |
-| `packages/shared`           | Enums (single source of truth for every status vocabulary), Zod schemas, API DTO types, formatting helpers. Browser-safe.   |
-| `packages/db`               | Drizzle schema, migrations, repositories (data-access layer returning DTOs), reference data sync, development seed.         |
-| `packages/agent-core`       | Agent template definitions, departments, task-routing contract + reference router.                                          |
-| `packages/provider-core`    | `AIProvider` contract, mock providers, unconfigured live adapters, provider router, placeholder pricing.                    |
-| `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                  |
-| `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                      |
-| `packages/ui`               | Accessible UI primitives (buttons, status pills, progress, panels, sparkline, skeletons) and status-tone mapping.           |
-| `infrastructure`            | Docker Compose for PostgreSQL 16 and Redis 7 (development).                                                                 |
+| Path                        | Responsibility                                                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`                  | Next.js 16 command centre. Server components fetch the API; `/api/*` is rewritten to the API so the browser is same-origin.                                 |
+| `apps/api`                  | Fastify 5 HTTP API (`/v1/*`, `/health`). Thin: validates with Zod, calls repositories, maps errors.                                                         |
+| `apps/worker`               | BullMQ workers. Stage 01: heartbeat (drives worker health) and a no-op `agent-tasks` processor.                                                             |
+| `packages/shared`           | Enums (single source of truth for every status vocabulary), Zod schemas, API DTO types, formatting helpers. Browser-safe.                                   |
+| `packages/db`               | Drizzle schema, migrations, repositories (data-access layer returning DTOs), reference data sync, development seed.                                         |
+| `packages/agent-core`       | Agent template definitions, departments, task-routing contract + reference router.                                                                          |
+| `packages/provider-core`    | `AIProvider` contract, mock providers, unconfigured live adapters, provider router, placeholder pricing.                                                    |
+| `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                                                  |
+| `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                                                      |
+| `packages/context-core`     | Stage 03 Agent Context Engine: deterministic context-pack assembly, relevance, budgets, rule evaluation, retriever/ingestion contracts. Pure, browser-safe. |
+| `packages/ui`               | Accessible UI primitives (buttons, status pills, progress, panels, sparkline, skeletons) and status-tone mapping.                                           |
+| `infrastructure`            | Docker Compose for PostgreSQL 16 and Redis 7 (development).                                                                                                 |
 
 ## Key decisions
 
@@ -80,6 +81,8 @@ AUDIT LOG                        audit_events (append-only)
 10. **Authentication (Stage 02).** Server-side sessions with argon2id
     passwords, company-scoped RBAC and a separate agent authority model —
     see the sections below. The Stage 01 `dev-user` assumption is gone.
+11. **Company knowledge & Context Engine (Stage 03).** See below and
+    `docs/KNOWLEDGE_SYSTEM.md`.
 
 ## Request flow (example: Add Company)
 
@@ -235,3 +238,38 @@ default deny) → explicit deny → autonomy ceiling → grant `require_approval
 
 Every decision is subject (in later stages) to cost policies (Stage 11),
 company rules (Stage 03) and the execution controller (Stage 06).
+
+## Company knowledge & Agent Context Engine (Stage 03)
+
+Details: `docs/KNOWLEDGE_SYSTEM.md`.
+
+- **Structured company profile.** Identity, business, brand and compliance
+  sections are typed columns on `companies` (no free-form JSON blob), edited
+  per section through strict schemas (`PUT /v1/companies/:ref/profile/:section`).
+  The AI operations policy is a 1:1 table (`company_ai_policies`).
+- **Knowledge library.** Versioned `knowledge_items` with provenance,
+  verification, confidence, sensitivity, lifecycle and freshness; explicit
+  task/agent links; Postgres full-text search (generated `tsvector` + GIN,
+  `websearch_to_tsquery`) — no external search service.
+- **Rules engine.** `brand_rules`, `commercial_rules`, `compliance_rules` —
+  generic, queryable structures (IF company AND action THEN effect) evaluated by
+  `evaluateCompanyAction`; nothing company-specific is hard-coded.
+- **Context Engine.** `@aibos/context-core` is pure and deterministic:
+  `assembleContextPack(request, sources)` → `AgentContextPack`. `@aibos/db`
+  loads the sources (`loadContextSources`, `PostgresKnowledgeRetriever`) and
+  enforces that the agent serves the company and the task belongs to it.
+- **Context precedence.** P1 management-approved rules/policies → P2 approved
+  profile → P3 official documents/data → P4 SOPs → P5 verified company research
+  → P6 verified external information → P7 unverified research → P8 inference.
+- **Source of truth.** The database is authoritative; AI output enters as
+  DRAFT/UNVERIFIED and needs human verification before approval.
+- **Future provider relationship.**
+
+```
+Task → Context Engine → AgentContextPack → renderContextPack() → AIProvider.executeTask()
+```
+
+Providers (Stages 07–09) receive only the pack. They never query company
+tables, never see other companies' data and never get raw conversation
+history. Semantic retrieval can later replace the `KnowledgeRetriever`
+implementation without changing the engine or its isolation guarantees.

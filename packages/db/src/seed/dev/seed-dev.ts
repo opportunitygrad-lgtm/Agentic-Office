@@ -40,6 +40,7 @@ import { requiredApprovalPermissions } from "@aibos/access-core";
 import { hashPassword } from "../../auth/crypto";
 import { applyTemplateGrants } from "../../repositories/agent-authority";
 import { serviceActor } from "../../repositories/util";
+import { clearKnowledgeSeed, seedKnowledge } from "./seed-knowledge";
 
 const SEED_ACTOR = serviceActor("dev-seed");
 const ORIGIN = "dev_seed" as const;
@@ -56,6 +57,7 @@ function mulberry32(seed: number) {
 }
 
 export async function clearDevSeed(db: Database): Promise<void> {
+  await clearKnowledgeSeed(db);
   await db.delete(aiUsageRecords).where(eq(aiUsageRecords.origin, ORIGIN));
   await db.delete(auditEvents).where(eq(auditEvents.origin, ORIGIN));
   await db.delete(approvals).where(eq(approvals.origin, ORIGIN));
@@ -388,6 +390,14 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
   }
   if (rows.length) await db.insert(integrations).values(rows);
 
+  const knowledgeCounts = await seedKnowledge(db, {
+    now,
+    companyIds,
+    agentIds,
+    taskIds,
+    approverId: ownerId,
+  });
+
   const [counts] = await db.execute<{
     agents: number;
     tasks: number;
@@ -399,6 +409,6 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
     select (select count(*)::int from ${users}) as users, (select count(*)::int from ${agents}) as agents, (select count(*)::int from ${tasks}) as tasks,
            (select count(*)::int from ${approvals}) as approvals, (select count(*)::int from ${auditEvents}) as events,
            (select count(*)::int from ${aiUsageRecords}) as usage`);
-  return { companies: companyIds.size, ...(counts ?? {}) };
+  return { companies: companyIds.size, ...(counts ?? {}), ...knowledgeCounts };
 }
 export { DEV_SEED_PASSWORD, SEED_USERS } from "./data";

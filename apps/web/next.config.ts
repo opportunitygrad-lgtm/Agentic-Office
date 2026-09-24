@@ -6,7 +6,14 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   agentRules: false,
-  transpilePackages: ["@aibos/ui", "@aibos/shared", "@aibos/browser-core", "@aibos/access-core"],
+  transpilePackages: [
+    "@aibos/ui",
+    "@aibos/shared",
+    "@aibos/browser-core",
+    "@aibos/access-core",
+    "@aibos/agent-core",
+    "@aibos/context-core",
+  ],
   /** Same-origin proxy so the browser never needs CORS or the API's address. */
   async rewrites() {
     return [{ source: "/api/v1/:path*", destination: `${apiUrl}/v1/:path*` }];

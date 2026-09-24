@@ -22,6 +22,13 @@
       "when": 1790236511591,
       "tag": "0002_stage02_drop_legacy_autonomy",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790247193922,
+      "tag": "0003_stage03_knowledge_context",
+      "breakpoints": true
     }
   ]
 }

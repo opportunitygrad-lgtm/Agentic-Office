@@ -42,7 +42,14 @@ export default async function CompaniesPage() {
                 <Monogram name={c.name} color={c.accentColor} size="lg" />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-[16px] font-semibold tracking-tight">{c.name}</h2>
+                    <h2 className="text-[16px] font-semibold tracking-tight">
+                      <Link
+                        href={`/companies/${c.slug}`}
+                        className="focus-ring rounded hover:underline"
+                      >
+                        {c.name}
+                      </Link>
+                    </h2>
                     <StatusPill
                       tone={c.status === "active" ? "live" : "neutral"}
                       label={c.status === "active" ? "Active" : "Inactive"}
@@ -85,10 +92,22 @@ export default async function CompaniesPage() {
               )}
               <div className="mt-5 flex flex-wrap gap-2 border-t border-line/70 pt-4">
                 <Link
-                  href={`/?company=${c.slug}`}
+                  href={`/companies/${c.slug}`}
+                  className="focus-ring inline-flex h-8 items-center rounded-lg bg-accent px-3 text-[13px] font-medium text-white hover:bg-accent-strong"
+                >
+                  Company profile
+                </Link>
+                <Link
+                  href={`/companies/${c.slug}?tab=knowledge`}
                   className="focus-ring inline-flex h-8 items-center rounded-lg bg-surface-2 px-3 text-[13px] font-medium ring-1 ring-inset ring-line hover:bg-surface-3"
                 >
-                  Open command centre
+                  Knowledge
+                </Link>
+                <Link
+                  href={`/?company=${c.slug}`}
+                  className="focus-ring inline-flex h-8 items-center rounded-lg px-3 text-[13px] font-medium text-fg-muted hover:bg-surface-2 hover:text-fg"
+                >
+                  Command centre
                 </Link>
                 <Link
                   href={`/workforce/agents?company=${c.slug}`}

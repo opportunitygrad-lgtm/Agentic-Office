@@ -280,6 +280,13 @@ export const registerRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.get("/tasks/:id", async (req) => {
+    const { id } = idParam.parse(req.params);
+    const [task] = await listTasks(db, { ids: [id], scope: scopeFor(req, "task.view") });
+    if (!task) throw new NotFoundError("Task", id);
+    return { data: task };
+  });
+
   app.get("/tasks/:id/tree", async (req) => {
     const { id } = idParam.parse(req.params);
     const tree = await getTaskTree(db, id, scopeFor(req, "task.view"));

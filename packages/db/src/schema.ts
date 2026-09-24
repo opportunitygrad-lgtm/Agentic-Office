@@ -6,6 +6,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  customType,
   index,
   inet,
   integer,
@@ -47,6 +48,24 @@ import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   TASK_TYPES,
+  AI_POLICY_MODES,
+  BRAND_RULE_CATEGORIES,
+  COMMERCIAL_RULE_CATEGORIES,
+  COMMERCIAL_RULE_EFFECTS,
+  COMPLIANCE_EFFECTS,
+  CONFIDENCE_LEVELS,
+  KNOWLEDGE_LINK_TARGETS,
+  KNOWLEDGE_SCOPES,
+  KNOWLEDGE_SOURCE_TYPES,
+  KNOWLEDGE_STATUSES,
+  KNOWLEDGE_TYPES,
+  RULE_CHANNELS,
+  RULE_PERIODS,
+  RULE_SEVERITIES,
+  RULE_STATUSES,
+  SENSITIVITY_LEVELS,
+  STALE_KNOWLEDGE_POLICIES,
+  VERIFICATION_STATUSES,
 } from "@aibos/shared";
 
 /* ---------- enums (sourced from @aibos/shared) ---------- */
@@ -76,6 +95,27 @@ export const authState = pgEnum("auth_state", AUTH_STATES);
 export const budgetScope = pgEnum("budget_scope", BUDGET_SCOPES);
 export const budgetAction = pgEnum("budget_action", BUDGET_ACTIONS);
 export const dataOrigin = pgEnum("data_origin", DATA_ORIGINS);
+export const knowledgeType = pgEnum("knowledge_type", KNOWLEDGE_TYPES);
+export const knowledgeStatus = pgEnum("knowledge_status", KNOWLEDGE_STATUSES);
+export const confidenceLevel = pgEnum("confidence_level", CONFIDENCE_LEVELS);
+export const verificationStatus = pgEnum("verification_status", VERIFICATION_STATUSES);
+export const knowledgeSourceType = pgEnum("knowledge_source_type", KNOWLEDGE_SOURCE_TYPES);
+export const sensitivityLevel = pgEnum("sensitivity_level", SENSITIVITY_LEVELS);
+export const knowledgeScope = pgEnum("knowledge_scope", KNOWLEDGE_SCOPES);
+export const knowledgeLinkTarget = pgEnum("knowledge_link_target", KNOWLEDGE_LINK_TARGETS);
+export const ruleStatus = pgEnum("rule_status", RULE_STATUSES);
+export const ruleSeverity = pgEnum("rule_severity", RULE_SEVERITIES);
+export const brandRuleCategory = pgEnum("brand_rule_category", BRAND_RULE_CATEGORIES);
+export const ruleChannel = pgEnum("rule_channel", RULE_CHANNELS);
+export const commercialRuleCategory = pgEnum(
+  "commercial_rule_category",
+  COMMERCIAL_RULE_CATEGORIES,
+);
+export const commercialRuleEffect = pgEnum("commercial_rule_effect", COMMERCIAL_RULE_EFFECTS);
+export const rulePeriod = pgEnum("rule_period", RULE_PERIODS);
+export const complianceEffect = pgEnum("compliance_effect", COMPLIANCE_EFFECTS);
+export const aiPolicyMode = pgEnum("ai_policy_mode", AI_POLICY_MODES);
+export const staleKnowledgePolicy = pgEnum("stale_knowledge_policy", STALE_KNOWLEDGE_POLICIES);
 
 /* ---------- shared column helpers ---------- */
 
@@ -125,6 +165,29 @@ export const companies = pgTable(
     prohibitedClaims: textList("prohibited_claims"),
     competitorNotes: text("competitor_notes"),
     complianceNotes: text("compliance_notes"),
+    /* Stage 03 structured profile (identity / business / brand / compliance) */
+    tradingName: text("trading_name"),
+    contactEmail: text("contact_email"),
+    contactPhone: text("contact_phone"),
+    contactAddress: text("contact_address"),
+    registrationNumber: text("registration_number"),
+    taxIdentifier: text("tax_identifier"),
+    products: textList("products"),
+    revenueModel: text("revenue_model"),
+    secondaryObjectives: textList("secondary_objectives"),
+    salesChannels: textList("sales_channels"),
+    marketingChannels: textList("marketing_channels"),
+    brandPersonality: text("brand_personality"),
+    brandVoice: text("brand_voice"),
+    visualGuidance: text("visual_guidance"),
+    approvedPhrases: textList("approved_phrases"),
+    prohibitedPhrases: textList("prohibited_phrases"),
+    claimsAllowed: textList("claims_allowed"),
+    claimsRequiringEvidence: textList("claims_requiring_evidence"),
+    jurisdictions: textList("jurisdictions"),
+    regulators: textList("regulators"),
+    legalDisclaimers: textList("legal_disclaimers"),
+    dataHandlingRules: textList("data_handling_rules"),
     defaultProvider: providerType("default_provider").notNull().default("CLAUDE"),
     monthlyAiBudget: usd("monthly_ai_budget").notNull().default(0),
     dailyAiBudget: usd("daily_ai_budget").notNull().default(0),
@@ -285,6 +348,8 @@ export const tasks = pgTable(
     currentAction: text("current_action"),
     currentTool: text("current_tool"),
     requiresApproval: boolean("requires_approval").notNull().default(false),
+    /** Stage 03: the task may use clearly-labelled UNVERIFIED research as context. */
+    allowUnverifiedContext: boolean("allow_unverified_context").notNull().default(false),
     dueAt: timestamp("due_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -684,6 +749,266 @@ export const serviceIdentities = pgTable("service_identities", {
   createdAt: createdAt(),
 });
 
+/* ---------- company knowledge & rules (Stage 03) ---------- */
+
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
+
+/** 1:1 AI operations policy per company. */
+export const companyAiPolicies = pgTable("company_ai_policies", {
+  companyId: uuid("company_id")
+    .primaryKey()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  allowedProviders: providerType("allowed_providers")
+    .array()
+    .notNull()
+    .default(sql`'{CLAUDE,OPENAI,GROK,LOCAL}'::provider_type[]`),
+  defaultResearchLimit: integer("default_research_limit").notNull().default(20),
+  deepResearchPolicy: aiPolicyMode("deep_research_policy").notNull().default("approval_required"),
+  externalActionPolicy: aiPolicyMode("external_action_policy")
+    .notNull()
+    .default("approval_required"),
+  browserPolicy: aiPolicyMode("browser_policy").notNull().default("approval_required"),
+  autoSendPolicy: aiPolicyMode("auto_send_policy").notNull().default("disabled"),
+  staleKnowledgePolicy: staleKnowledgePolicy("stale_knowledge_policy").notNull().default("exclude"),
+  customRules: textList("custom_rules"),
+  updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/**
+ * Knowledge library. Each version is a row; versions of one fact share
+ * `lineage_id`. At most one APPROVED and one open (draft/review) version per
+ * lineage. `company_id` NULL ⇔ scope GLOBAL.
+ */
+export const knowledgeItems = pgTable(
+  "knowledge_items",
+  {
+    id: id(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    scope: knowledgeScope("scope").notNull().default("company"),
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    content: text("content").notNull(),
+    type: knowledgeType("type").notNull(),
+    category: text("category"),
+    tags: textList("tags"),
+    sourceType: knowledgeSourceType("source_type").notNull().default("unknown"),
+    sourceReference: text("source_reference"),
+    sourceUrl: text("source_url"),
+    /** Reference to a future file record — metadata only, nothing is parsed. */
+    sourceFileRef: text("source_file_ref"),
+    sourceOwner: text("source_owner"),
+    provenanceNotes: text("provenance_notes"),
+    confidence: confidenceLevel("confidence").notNull().default("medium"),
+    verificationStatus: verificationStatus("verification_status").notNull().default("unverified"),
+    status: knowledgeStatus("status").notNull().default("draft"),
+    sensitivity: sensitivityLevel("sensitivity").notNull().default("internal"),
+    /** Research that a task may use as clearly-labelled UNVERIFIED context. */
+    usableAsUnverified: boolean("usable_as_unverified").notNull().default(false),
+    effectiveAt: timestamp("effective_at", { withTimezone: true }),
+    reviewAt: timestamp("review_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+    /** Subject key used for simple conflict detection (e.g. fee:integrated-atpl). */
+    conflictKey: text("conflict_key"),
+    version: integer("version").notNull().default(1),
+    lineageId: uuid("lineage_id").notNull(),
+    supersedesId: uuid("supersedes_id").references((): AnyPgColumn => knowledgeItems.id, {
+      onDelete: "set null",
+    }),
+    supersededById: uuid("superseded_by_id").references((): AnyPgColumn => knowledgeItems.id, {
+      onDelete: "set null",
+    }),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    approvedByUserId: uuid("approved_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    searchVector: tsvector("search_vector").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce(title, '')), 'A') || setweight(to_tsvector('english', aibos_tags_text(tags)), 'A') || setweight(to_tsvector('english', coalesce(summary, '')), 'B') || setweight(to_tsvector('english', coalesce(content, '')), 'C')`,
+    ),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("knowledge_company_status_idx").on(t.companyId, t.status),
+    index("knowledge_lineage_idx").on(t.lineageId),
+    index("knowledge_search_idx").using("gin", t.searchVector),
+    uniqueIndex("knowledge_lineage_approved_uq")
+      .on(t.lineageId)
+      .where(sql`status = 'approved'`),
+    uniqueIndex("knowledge_lineage_open_uq")
+      .on(t.lineageId)
+      .where(sql`status in ('draft', 'review')`),
+    check("knowledge_scope_company", sql`(${t.scope} = 'global') = (${t.companyId} is null)`),
+    check(
+      "knowledge_ai_not_management_confirmed",
+      sql`not (${t.sourceType} in ('grok_research','claude_research','openai_research','system_generated') and ${t.verificationStatus} = 'management_confirmed')`,
+    ),
+  ],
+);
+
+/** Explicit links: knowledge an agent or task must see. */
+export const knowledgeLinks = pgTable(
+  "knowledge_links",
+  {
+    id: id(),
+    knowledgeId: uuid("knowledge_id")
+      .notNull()
+      .references(() => knowledgeItems.id, { onDelete: "cascade" }),
+    target: knowledgeLinkTarget("target").notNull(),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    note: text("note"),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("knowledge_links_uq").on(t.knowledgeId, t.taskId, t.agentId).nullsNotDistinct(),
+    index("knowledge_links_task_idx").on(t.taskId),
+    index("knowledge_links_agent_idx").on(t.agentId),
+    check(
+      "knowledge_links_target",
+      sql`(${t.target} = 'task' and ${t.taskId} is not null and ${t.agentId} is null) or (${t.target} = 'agent' and ${t.agentId} is not null and ${t.taskId} is null)`,
+    ),
+  ],
+);
+
+const ruleColumns = () => ({
+  id: id(),
+  /** NULL = global rule (applies to every company). */
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  severity: ruleSeverity("severity").notNull().default("required"),
+  active: boolean("active").notNull().default(true),
+  status: ruleStatus("status").notNull().default("draft"),
+  createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  approvedByUserId: uuid("approved_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  origin: origin(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const brandRules = pgTable(
+  "brand_rules",
+  {
+    ...ruleColumns(),
+    category: brandRuleCategory("category").notNull(),
+    channel: ruleChannel("channel").notNull().default("all"),
+  },
+  (t) => [index("brand_rules_company_idx").on(t.companyId)],
+);
+
+/** Queryable commercial constraints (pricing, discounts, ad budgets...). */
+export const commercialRules = pgTable(
+  "commercial_rules",
+  {
+    ...ruleColumns(),
+    category: commercialRuleCategory("category").notNull(),
+    /** Action key the rule governs, e.g. meta.budget_increase. */
+    appliesTo: text("applies_to").notNull(),
+    effect: commercialRuleEffect("effect").notNull().default("info"),
+    limitAmount: numeric("limit_amount", { precision: 18, scale: 2, mode: "number" }),
+    currency: text("currency"),
+    period: rulePeriod("period"),
+    requiredPermission: text("required_permission"),
+  },
+  (t) => [
+    index("commercial_rules_company_idx").on(t.companyId, t.appliesTo),
+    check("commercial_limit_nonneg", sql`${t.limitAmount} is null or ${t.limitAmount} >= 0`),
+  ],
+);
+
+/** IF company AND action THEN require approval / prohibit / disclose. */
+export const complianceRules = pgTable(
+  "compliance_rules",
+  {
+    ...ruleColumns(),
+    action: text("action").notNull(),
+    jurisdiction: text("jurisdiction"),
+    effect: complianceEffect("effect").notNull().default("info"),
+    disclosureText: text("disclosure_text"),
+    requiredPermission: text("required_permission"),
+  },
+  (t) => [index("compliance_rules_company_idx").on(t.companyId, t.action)],
+);
+
+/**
+ * Agent access to CONFIDENTIAL / RESTRICTED knowledge. Default (no rows):
+ * PUBLIC + INTERNAL only. A row applies to one agent, a department, or the
+ * whole company (both NULL).
+ */
+export const knowledgeAccessPolicies = pgTable(
+  "knowledge_access_policies",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "cascade" }),
+    maxSensitivity: sensitivityLevel("max_sensitivity").notNull(),
+    note: text("note"),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("knowledge_access_uq").on(t.companyId, t.agentId, t.departmentId).nullsNotDistinct(),
+  ],
+);
+
+/** Per-agent overrides of the template knowledge profile. */
+export const agentKnowledgeProfiles = pgTable("agent_knowledge_profiles", {
+  agentId: uuid("agent_id")
+    .primaryKey()
+    .references(() => agents.id, { onDelete: "cascade" }),
+  requiredTypes: knowledgeType("required_types")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  preferredTags: textList("preferred_tags"),
+  brandCategories: brandRuleCategory("brand_categories")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  commercialCategories: commercialRuleCategory("commercial_categories")
+    .array()
+    .notNull()
+    .default(sql`'{}'`),
+  updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 /* ---------- relations (for relational queries) ---------- */
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -744,3 +1069,8 @@ export type Session = typeof sessions.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type CompanyMembership = typeof companyMemberships.$inferSelect;
 export type AgentPermissionGrant = typeof agentPermissionGrants.$inferSelect;
+export type KnowledgeItem = typeof knowledgeItems.$inferSelect;
+export type BrandRule = typeof brandRules.$inferSelect;
+export type CommercialRule = typeof commercialRules.$inferSelect;
+export type ComplianceRule = typeof complianceRules.$inferSelect;
+export type CompanyAiPolicy = typeof companyAiPolicies.$inferSelect;

@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@aibos/access-core": "workspace:*",
+    "@aibos/agent-core": "workspace:*",
     "@aibos/browser-core": "workspace:*",
+    "@aibos/context-core": "workspace:*",
     "@aibos/shared": "workspace:*",
     "@aibos/ui": "workspace:*",
     "geist": "^1.7.2",

@@ -19,6 +19,7 @@ import {
   approvals,
   budgetPolicies,
   companies,
+  companyAiPolicies,
   departments,
   tasks,
   type Agent,
@@ -249,6 +250,7 @@ export async function createCompany(
       })
       .returning();
     if (!company) throw new Error("Company insert failed");
+    await tx.insert(companyAiPolicies).values({ companyId: company.id }).onConflictDoNothing();
 
     await tx.insert(budgetPolicies).values([
       {

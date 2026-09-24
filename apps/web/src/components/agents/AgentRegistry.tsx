@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Bot, Search } from "lucide-react";
 import {
   AGENT_STATUSES,
@@ -274,6 +275,14 @@ function AgentDetail({ agent: a }: { agent: AgentDTO }) {
           <MockBadge label="Development seed agent" />
         </div>
       )}
+      <div className="flex flex-wrap gap-2 px-5 pt-4">
+        <Link
+          href={`/workforce/agents/${a.id}`}
+          className="focus-ring inline-flex h-8 items-center rounded-lg bg-accent px-3 text-[13px] font-medium text-white hover:bg-accent-strong"
+        >
+          Open agent · Context preview
+        </Link>
+      </div>
       <Section title="Access & Authority">
         <AgentAuthorityPanel agentId={a.id} />
       </Section>

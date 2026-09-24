@@ -37,6 +37,19 @@ Password reset emails are not sent yet (Stage 14): in development the API logs
 the reset link (`DEVELOPMENT ONLY — password reset link`). Invitation links are
 shown once to the inviter in Settings → Users & Access.
 
+## Company knowledge (development)
+
+`pnpm db:seed` also loads DEVELOPMENT SEED profiles, knowledge and rules for the
+three companies (known high-level facts only; everything is editable and is
+reset by the next seed). Useful places to look:
+
+- `/companies/<slug>` — profile tabs (Overview, Business, Brand, Commercial,
+  Compliance, AI Policy, Knowledge, History).
+- `/workforce/agents/<id>` and `/tasks/item/<id>` — Context Preview.
+- `/settings/knowledge` — GLOBAL knowledge.
+
+Try `ept.manager@aibos.example` to see restricted items hidden and redacted.
+
 ## First administrator (empty database)
 
 ```bash
@@ -78,7 +91,10 @@ Targeted runs: `pnpm --filter @aibos/api test`, `pnpm --filter @aibos/web test`.
 
 ## Conventions
 
-- Status vocabularies are defined once in `packages/shared/src/enums.ts`.
+- Status vocabularies are defined once in `packages/shared/src/enums.ts`
+  (knowledge vocabularies in `packages/shared/src/knowledge.ts`).
+- Agents get company context only through `buildContextPack()`; never pass raw
+  company tables or conversation history to a provider.
 - Add API inputs as Zod schemas in `packages/shared/src/schemas.ts`; reuse
   them in the UI.
 - Data access goes through `packages/db/src/repositories`; the API stays thin.

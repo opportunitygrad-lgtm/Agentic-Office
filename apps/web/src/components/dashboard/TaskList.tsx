@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { CornerDownRight, ListChecks } from "lucide-react";
 import { formatUsd, titleCase, type TaskDTO } from "@aibos/shared";
 import { EmptyState, ProgressBar, StatusPill, TASK_STATUS_META, cn } from "@aibos/ui";
@@ -23,7 +24,12 @@ export function TaskRow({ task, depth = 0 }: { task: TaskDTO; depth?: number }) 
           {task.parentTaskId && (
             <CornerDownRight className="size-3.5 shrink-0 text-fg-faint" aria-label="Subtask" />
           )}
-          <p className="truncate text-[13.5px] font-medium">{task.title}</p>
+          <Link
+            href={`/tasks/item/${task.id}`}
+            className="focus-ring truncate rounded text-[13.5px] font-medium hover:underline"
+          >
+            {task.title}
+          </Link>
           {task.childCount > 0 && (
             <span
               className="shrink-0 rounded bg-surface-3 px-1 text-[10.5px] text-fg-muted"

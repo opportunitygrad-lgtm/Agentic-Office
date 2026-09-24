@@ -117,6 +117,51 @@ const CATEGORIES: { category: string; permissions: Omit<PermissionDefinition, "c
     ],
   },
   {
+    category: "Knowledge & rules",
+    permissions: [
+      p("knowledge.view", "View knowledge", "See the company knowledge library and rules."),
+      p("knowledge.create", "Create knowledge", "Add draft knowledge items."),
+      p("knowledge.edit", "Edit knowledge", "Edit drafts, submit for review and link knowledge."),
+      p(
+        "knowledge.approve",
+        "Approve knowledge",
+        "Approve, reject or supersede authoritative company knowledge.",
+        { sensitive: true },
+      ),
+      p("knowledge.archive", "Archive knowledge", "Retire knowledge items."),
+      p(
+        "knowledge.global.manage",
+        "Manage global knowledge",
+        "Create and approve GLOBAL knowledge shared by every company.",
+        { scope: "global", sensitive: true },
+      ),
+      p(
+        "knowledge.confidential.read",
+        "Read confidential knowledge",
+        "See knowledge classified CONFIDENTIAL.",
+        { sensitive: true },
+      ),
+      p(
+        "knowledge.restricted.read",
+        "Read restricted knowledge",
+        "See knowledge classified RESTRICTED (e.g. banking details).",
+        { sensitive: true },
+      ),
+      p(
+        "policy.manage",
+        "Manage company rules",
+        "Create and edit brand, commercial and compliance rules.",
+        {
+          sensitive: true,
+        },
+      ),
+      p("policy.approve", "Approve company rules", "Approve rules so they bind agents.", {
+        sensitive: true,
+      }),
+      p("context.preview", "Preview agent context", "See what an agent would know for a task."),
+    ],
+  },
+  {
     category: "Email",
     permissions: [
       p("email.view", "View email", "See monitored mailboxes and drafts."),

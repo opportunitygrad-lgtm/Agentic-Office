@@ -133,6 +133,7 @@ export const NAV: NavGroup[] = [
           { label: "General", href: "/settings" },
           { label: "Users & Access", href: "/settings/users", permission: "user.view" },
           { label: "Roles & Permissions", href: "/settings/roles", permission: "user.view" },
+          { label: "Global Knowledge", href: "/settings/knowledge", permission: "knowledge.view" },
         ],
       },
     ],

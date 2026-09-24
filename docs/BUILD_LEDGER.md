@@ -4,48 +4,48 @@ The authoritative, ordered plan for AI Business OS. Each stage is delivered by o
 
 Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
 
-| #   | Stage                                            | Status   |
-| --- | ------------------------------------------------ | -------- |
-| 01  | Foundation                                       | COMPLETE |
-| 02  | Authentication, Users, Roles & Permission Engine | COMPLETE |
-| 03  | Company onboarding & knowledge base              | PLANNED  |
-| 04  | Agent registry management                        | PLANNED  |
-| 05  | Agent prompt library                             | PLANNED  |
-| 06  | Task orchestration & handoffs                    | PLANNED  |
-| 07  | Claude integration                               | PLANNED  |
-| 08  | OpenAI integration                               | PLANNED  |
-| 09  | Grok integration                                 | PLANNED  |
-| 10  | AI provider router                               | PLANNED  |
-| 11  | Cost Governor                                    | PLANNED  |
-| 12  | Google Sheets & Drive + credential vault         | PLANNED  |
-| 13  | Lead management                                  | PLANNED  |
-| 14  | Outlook / Microsoft Graph connection             | PLANNED  |
-| 15  | Email monitoring                                 | PLANNED  |
-| 16  | Email drafting & replies                         | PLANNED  |
-| 17  | Email autonomy rules                             | PLANNED  |
-| 18  | Follow-up engine                                 | PLANNED  |
-| 19  | Meta connection                                  | PLANNED  |
-| 20  | Meta monitoring                                  | PLANNED  |
-| 21  | Meta Ad Library intelligence                     | PLANNED  |
-| 22  | Campaign creation                                | PLANNED  |
-| 23  | Meta execution rules                             | PLANNED  |
-| 24  | Website monitoring                               | PLANNED  |
-| 25  | GA4                                              | PLANNED  |
-| 26  | Search Console                                   | PLANNED  |
-| 27  | WordPress                                        | PLANNED  |
-| 28  | SEO                                              | PLANNED  |
-| 29  | Browser workers                                  | PLANNED  |
-| 30  | Persistent browser profiles                      | PLANNED  |
-| 31  | Live browser mini-screen                         | PLANNED  |
-| 32  | Human takeover                                   | PLANNED  |
-| 33  | Approval engine                                  | PLANNED  |
-| 34  | Audit system                                     | PLANNED  |
-| 35  | Notifications                                    | PLANNED  |
-| 36  | Research workspace & webhooks                    | PLANNED  |
-| 37  | Deployment                                       | PLANNED  |
-| 38  | Backups & disaster recovery                      | PLANNED  |
-| 39  | Security hardening                               | PLANNED  |
-| 40  | Final QA                                         | PLANNED  |
+| #   | Stage                                                           | Status   |
+| --- | --------------------------------------------------------------- | -------- |
+| 01  | Foundation                                                      | COMPLETE |
+| 02  | Authentication, Users, Roles & Permission Engine                | COMPLETE |
+| 03  | Company Profiles, Knowledge, Brand Rules & Agent Context Engine | COMPLETE |
+| 04  | Agent registry management                                       | PLANNED  |
+| 05  | Agent prompt library                                            | PLANNED  |
+| 06  | Task orchestration & handoffs                                   | PLANNED  |
+| 07  | Claude integration                                              | PLANNED  |
+| 08  | OpenAI integration                                              | PLANNED  |
+| 09  | Grok integration                                                | PLANNED  |
+| 10  | AI provider router                                              | PLANNED  |
+| 11  | Cost Governor                                                   | PLANNED  |
+| 12  | Google Sheets & Drive + credential vault                        | PLANNED  |
+| 13  | Lead management                                                 | PLANNED  |
+| 14  | Outlook / Microsoft Graph connection                            | PLANNED  |
+| 15  | Email monitoring                                                | PLANNED  |
+| 16  | Email drafting & replies                                        | PLANNED  |
+| 17  | Email autonomy rules                                            | PLANNED  |
+| 18  | Follow-up engine                                                | PLANNED  |
+| 19  | Meta connection                                                 | PLANNED  |
+| 20  | Meta monitoring                                                 | PLANNED  |
+| 21  | Meta Ad Library intelligence                                    | PLANNED  |
+| 22  | Campaign creation                                               | PLANNED  |
+| 23  | Meta execution rules                                            | PLANNED  |
+| 24  | Website monitoring                                              | PLANNED  |
+| 25  | GA4                                                             | PLANNED  |
+| 26  | Search Console                                                  | PLANNED  |
+| 27  | WordPress                                                       | PLANNED  |
+| 28  | SEO                                                             | PLANNED  |
+| 29  | Browser workers                                                 | PLANNED  |
+| 30  | Persistent browser profiles                                     | PLANNED  |
+| 31  | Live browser mini-screen                                        | PLANNED  |
+| 32  | Human takeover                                                  | PLANNED  |
+| 33  | Approval engine                                                 | PLANNED  |
+| 34  | Audit system                                                    | PLANNED  |
+| 35  | Notifications                                                   | PLANNED  |
+| 36  | Research workspace & webhooks                                   | PLANNED  |
+| 37  | Deployment                                                      | PLANNED  |
+| 38  | Backups & disaster recovery                                     | PLANNED  |
+| 39  | Security hardening                                              | PLANNED  |
+| 40  | Final QA                                                        | PLANNED  |
 
 ## Stage 01 — Foundation
 
@@ -76,12 +76,20 @@ Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
   - UI: login, forgot/reset password, account disabled, invitation pages; user menu + logout; permission-aware navigation; Users & Access; Roles & Permissions; agent Access & Authority panel; permission-aware approval decisions.
   - Tests: access-core (12), DB identity (14), API auth/authorization/security (28), web (17 new), Playwright auth + responsive E2E.
 
-## Stage 03 — Company onboarding & knowledge base
+## Stage 03 — Company Profiles, Knowledge, Brand Rules & Agent Context Engine
 
-- **Status:** PLANNED
-- **Objective:** Edit/archive companies, structured settings UI, company knowledge documents and rules for agent context.
+- **Status:** COMPLETE
+- **Objective:** Permanent company knowledge and context layer: structured profiles, knowledge library, brand/commercial/compliance rules and a deterministic Agent Context Engine that future providers consume.
 - **Dependencies:** Stage 02
-- **Completion notes:** —
+- **Completion notes:**
+  - Structured company profile (identity, business, brand, compliance) + AI operations policy; per-section strict editing with audit; company History feed.
+  - Knowledge library: 25 types, provenance (13 sources), confidence, verification, sensitivity, lifecycle (draft → review → approved → superseded/archived), versioning by lineage, freshness (review/expiry, stale policy), conflict detection with human resolution, explicit task/agent links, Postgres full-text search.
+  - Brand, commercial and compliance rule engines (generic, queryable; `evaluateCompanyAction`); Opportunitygrad ₹100 Meta budget limit stored as a company commercial rule.
+  - `@aibos/context-core`: deterministic Agent Context Pack assembly with precedence tiers, why-included reasons, budgets (small/standard/large/custom), mandatory critical rules and restrictions, company isolation, sensitivity access policies; `KnowledgeRetriever` and `KnowledgeIngestionAdapter` contracts (no live integrations).
+  - New permissions: knowledge.view/create/edit/approve/archive/global.manage, knowledge.confidential.read, knowledge.restricted.read, policy.manage, policy.approve, context.preview.
+  - UI: Company Profile tabs, Knowledge Library + detail drawer + add/edit, rules panels, AI policy + agent knowledge access, agent detail page with Context Preview and default-knowledge editor, task detail with Agent Context, Global Knowledge page.
+  - Development seed: profiles, 17 knowledge items (2 GLOBAL), 10 rules, links and an access policy — known high-level facts only.
+  - Tests: context-core (23), DB knowledge (19), API knowledge security (15), web (14 new), Playwright knowledge/context flow + responsive sweep of Stage 03 pages.
 
 ## Stage 04 — Agent registry management
 

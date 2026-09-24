@@ -99,6 +99,38 @@ then purge it from history. Deleting the file is not enough.
   no autonomy level bypasses permissions, and financial/destructive actions
   always require a human.
 
+## Knowledge sensitivity & context isolation (Stage 03)
+
+- **Classification:** PUBLIC · INTERNAL · CONFIDENTIAL · RESTRICTED.
+- **Humans:** reading CONFIDENTIAL/RESTRICTED knowledge needs
+  `knowledge.confidential.read` / `knowledge.restricted.read` for that company.
+  Such items are omitted from lists (never counted for text searches, so search
+  is not a content oracle), return 403 with a `security.knowledge_access_denied`
+  audit event on direct access, and are redacted in context previews.
+  Nobody can create, re-classify or grant access above their own clearance.
+- **Agents:** PUBLIC + INTERNAL by default; CONFIDENTIAL/RESTRICTED only via an
+  explicit `knowledge_access_policies` grant (agent, department or all company
+  agents), managed with `agent.permissions.manage`.
+- **Context isolation:** a context pack contains only the requested company's
+  knowledge and rules plus explicitly GLOBAL ones. The loader verifies the agent
+  serves the company and the task belongs to it; the engine re-checks every
+  candidate and blocks (and counts) anything from another company, even when
+  linked to the task. Links can only be created within one company. Shared
+  ownership never implies shared knowledge; cross-company context is not
+  supported in Stage 03.
+- **Authority:** approving company knowledge needs `knowledge.approve`; GLOBAL
+  knowledge and GLOBAL rules need `knowledge.global.manage` (a global
+  membership — a group admin scoped to some companies cannot change what every
+  company's agents see). Rules bind agents only after `policy.approve`.
+- **AI output:** never authoritative on its own — DRAFT/UNVERIFIED until a
+  human verifies it; never `management_confirmed` (database constraint).
+- **Logging:** knowledge audit events record ids, types, sensitivity and
+  changed field names — never content; confidential/restricted titles are
+  replaced by a label. Context previews are audited with counts only.
+- **Profile updates:** per-section strict schemas; unknown keys (status,
+  budgets, slug) are rejected with 400; compliance needs `policy.manage`, the
+  AI policy `company.settings.manage`.
+
 ## Security logging
 
 - Append-only `audit_events` with `actor_type`, `actor_user_id` /

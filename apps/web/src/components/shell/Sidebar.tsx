@@ -121,8 +121,8 @@ export function Sidebar({
       <div className="shrink-0 border-t border-line p-3">
         <div className="rounded-xl bg-surface-2 p-3">
           <div className="flex items-center justify-between">
-            <span className="text-[12px] font-semibold">Stage 02 · Secure access</span>
-            <span className="font-mono text-[10px] text-fg-faint">v0.2</span>
+            <span className="text-[12px] font-semibold">Stage 03 · Knowledge</span>
+            <span className="font-mono text-[10px] text-fg-faint">v0.3</span>
           </div>
           <ul className="mt-2 space-y-1 text-[11.5px] text-fg-muted">
             <li className="flex items-center gap-1.5">

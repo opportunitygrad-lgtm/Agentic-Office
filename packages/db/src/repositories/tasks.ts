@@ -25,6 +25,7 @@ export interface TaskFilters {
   statuses?: TaskStatus[];
   agentId?: string;
   rootTaskId?: string;
+  ids?: string[];
   limit?: number;
   scope?: AccessScope;
 }
@@ -39,6 +40,7 @@ export async function listTasks(db: Database, filters: TaskFilters = {}): Promis
   if (filters.statuses?.length) where.push(inArray(tasks.status, filters.statuses));
   if (filters.agentId) where.push(eq(tasks.assignedAgentId, filters.agentId));
   if (filters.rootTaskId) where.push(eq(tasks.rootTaskId, filters.rootTaskId));
+  if (filters.ids?.length) where.push(inArray(tasks.id, filters.ids));
   const scope = filters.scope ?? FULL_SCOPE;
   const scoped = scopeWhere(tasks.companyId, scope);
   if (scoped) where.push(scoped);
@@ -182,4 +184,10 @@ export async function getTaskTree(
 ): Promise<TaskDTO[]> {
   const list = await listTasks(db, { rootTaskId, limit: 500, scope });
   return list.sort((a, b) => (a.parentTaskId ? 1 : 0) - (b.parentTaskId ? 1 : 0));
+}
+
+/** Raw task row (callers apply authorization). */
+export async function getTaskRecord(db: Database, id: string): Promise<Task | null> {
+  const [row] = await db.select().from(tasks).where(eq(tasks.id, id));
+  return row ?? null;
 }

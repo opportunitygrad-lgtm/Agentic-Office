@@ -87,9 +87,15 @@ importers:
       '@aibos/access-core':
         specifier: workspace:*
         version: link:../../packages/access-core
+      '@aibos/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       '@aibos/browser-core':
         specifier: workspace:*
         version: link:../../packages/browser-core
+      '@aibos/context-core':
+        specifier: workspace:*
+        version: link:../../packages/context-core
       '@aibos/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -201,6 +207,18 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/context-core:
+    dependencies:
+      '@aibos/access-core':
+        specifier: workspace:*
+        version: link:../access-core
+      '@aibos/agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
+      '@aibos/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   packages/db:
     dependencies:
       '@aibos/access-core':
@@ -209,6 +227,9 @@ importers:
       '@aibos/agent-core':
         specifier: workspace:*
         version: link:../agent-core
+      '@aibos/context-core':
+        specifier: workspace:*
+        version: link:../context-core
       '@aibos/integration-core':
         specifier: workspace:*
         version: link:../integration-core
