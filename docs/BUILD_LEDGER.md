@@ -7,7 +7,7 @@ Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
 | #   | Stage                                            | Status   |
 | --- | ------------------------------------------------ | -------- |
 | 01  | Foundation                                       | COMPLETE |
-| 02  | Authentication, Users, Roles & Permission Engine | PLANNED  |
+| 02  | Authentication, Users, Roles & Permission Engine | COMPLETE |
 | 03  | Company onboarding & knowledge base              | PLANNED  |
 | 04  | Agent registry management                        | PLANNED  |
 | 05  | Agent prompt library                             | PLANNED  |
@@ -64,10 +64,17 @@ Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
 
 ## Stage 02 — Authentication, Users, Roles & Permission Engine
 
-- **Status:** PLANNED
+- **Status:** COMPLETE
 - **Objective:** Users, sessions, company-scoped roles (owner/admin/operator/viewer), permission checks on every API route; replace `dev-user` actor.
 - **Dependencies:** Stage 01
-- **Completion notes:** —
+- **Completion notes:**
+  - Email/password authentication with argon2id and first-party server-side sessions (HttpOnly, SameSite=Lax, Secure in production; hashed tokens; sliding + absolute expiry; rotation; revocation on logout, reset and disable).
+  - Password reset and invitation flows with single-use, expiring, hashed tokens; login throttling; no user enumeration; bootstrap CLI for the first Platform Owner.
+  - `@aibos/access-core`: 53 human permissions in 13 categories, 7 locked system roles + editable custom roles, data-driven approval authority, agent permission catalogue (tool.* / action.*), L0–L4 autonomy ladder, `canAgent` evaluation engine.
+  - Company memberships (single, multiple, global) with department restrictions; `AccessScope` enforced in every company-scoped repository and route; `?company=` never trusted.
+  - Internal service identities; audit events record actor type, user/agent/service id, session reference, resource and outcome.
+  - UI: login, forgot/reset password, account disabled, invitation pages; user menu + logout; permission-aware navigation; Users & Access; Roles & Permissions; agent Access & Authority panel; permission-aware approval decisions.
+  - Tests: access-core (12), DB identity (14), API auth/authorization/security (28), web (17 new), Playwright auth + responsive E2E.
 
 ## Stage 03 — Company onboarding & knowledge base
 

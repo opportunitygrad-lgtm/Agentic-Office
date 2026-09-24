@@ -26,7 +26,7 @@ export function HealthIndicator({ initial }: { initial: SystemHealthDTO | null }
     let alive = true;
     const load = async () => {
       try {
-        const res = await fetch("/api/health", { cache: "no-store" });
+        const res = await fetch("/api/v1/system/health", { cache: "no-store" });
         const data = (await res.json()) as SystemHealthDTO;
         if (alive) setHealth(data);
       } catch {

@@ -56,7 +56,7 @@ export function createTestDb(): DbHandle {
 export async function resetOperationalData(handle: DbHandle): Promise<void> {
   await handle.db.execute(sql`truncate table
     ai_usage_records, budget_policies, audit_events, approvals, tasks,
-    agent_company_assignments, agents, companies cascade`);
+    agent_company_assignments, agents, companies, users cascade`);
   await syncReferenceData(handle.db);
 }
 

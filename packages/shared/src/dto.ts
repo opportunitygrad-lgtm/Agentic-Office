@@ -3,6 +3,11 @@
  * The web app consumes these types; the API produces them.
  */
 import type {
+  ActorType,
+  MembershipStatus,
+  RoleScope,
+  UserStatus,
+  GrantEffectValue,
   AgentScope,
   AgentStatus,
   AgentTemplateKey,
@@ -177,9 +182,15 @@ export interface ApprovalDTO {
   beforeState: Record<string, unknown> | null;
   afterState: Record<string, unknown> | null;
   status: ApprovalStatus;
+  /** Human permissions required to decide this approval. */
+  requiredPermissions: string[];
+  /** Computed per viewer by the API: may the current user decide it? */
+  viewerCanDecide?: boolean;
+  viewerMissingPermissions?: string[];
   requestedAt: string;
   expiresAt: string | null;
   decidedBy: string | null;
+  decidedByUserId: string | null;
   decisionNotes: string | null;
   decidedAt: string | null;
   origin: DataOrigin;
@@ -191,7 +202,12 @@ export interface AuditEventDTO {
   company: CompanyRef | null;
   agent: { id: string; name: string } | null;
   taskId: string | null;
+  actorType: ActorType;
   actorUser: string | null;
+  actorUserId: string | null;
+  actorServiceId: string | null;
+  resourceType: string | null;
+  resourceId: string | null;
   action: string;
   tool: string | null;
   provider: ProviderType | null;
@@ -298,4 +314,101 @@ export interface ShellDTO {
   pendingApprovals: number;
   alerts: AlertDTO[];
   containsDevSeedData: boolean;
+}
+
+/* ---------- identity & access (Stage 02) ---------- */
+
+export interface RoleRef {
+  id: string;
+  key: string;
+  name: string;
+  isSystem: boolean;
+}
+
+export interface MembershipDTO {
+  id: string;
+  /** null = global membership (all companies). */
+  company: CompanyRef | null;
+  role: RoleRef;
+  status: MembershipStatus;
+  departments: { id: string; name: string }[];
+  joinedAt: string | null;
+  createdAt: string;
+}
+
+/** Public user shape. Never contains password hashes or tokens. */
+export interface UserDTO {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string;
+  avatarUrl: string | null;
+  status: UserStatus;
+  timezone: string | null;
+  locale: string | null;
+  isPlatformOwner: boolean;
+  lastLoginAt: string | null;
+  disabledAt: string | null;
+  createdAt: string;
+  memberships: MembershipDTO[];
+  origin: DataOrigin;
+}
+
+export interface MeDTO {
+  user: UserDTO;
+  session: { expiresAt: string };
+  isPlatformOwner: boolean;
+  /** Permissions held for every company (global memberships). */
+  globalPermissions: string[];
+  /** Effective permissions per accessible company (includes global ones). */
+  companyPermissions: Record<string, string[]>;
+  accessibleCompanies: CompanyRef[];
+}
+
+export interface PermissionDTO {
+  key: string;
+  category: string;
+  label: string;
+  description: string;
+  scope: RoleScope;
+  sensitive: boolean;
+}
+
+export interface RoleDTO extends RoleRef {
+  description: string | null;
+  scope: RoleScope;
+  companyId: string | null;
+  rank: number;
+  permissions: string[];
+  userCount: number;
+}
+
+export interface AgentAuthorityItem {
+  permission: string;
+  verb: string;
+  label: string;
+  risk: "low" | "medium" | "high";
+  grant: GrantEffectValue | null;
+  decision: "allow" | "require_approval" | "deny";
+  reason: string;
+}
+
+export interface AgentAuthorityDTO {
+  agentId: string;
+  companyId: string | null;
+  autonomyLevel: AutonomyLevel;
+  status: AgentStatus;
+  companies: CompanyRef[];
+  groups: { group: string; items: AgentAuthorityItem[] }[];
+  approvalGates: string[];
+  prohibitedActions: string[];
+  limits: {
+    perTaskBudget: number;
+    dailyBudget: number;
+    maxExternalSearches: number;
+    maxRetries: number;
+    concurrencyLimit: number;
+  };
+  viewerCanManage: boolean;
 }

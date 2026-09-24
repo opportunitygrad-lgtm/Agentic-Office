@@ -15,6 +15,7 @@ import { listAuditEvents } from "./audit";
 import { listCompanySummaries, resolveCompany, toCompanyRef } from "./companies";
 import { listTasks } from "./tasks";
 import { usageSummary } from "./usage";
+import { FULL_SCOPE, narrowScope, type AccessScope } from "./util";
 
 const ACTIVE_ORDER: Record<string, number> = {
   working: 0,
@@ -36,22 +37,50 @@ export function countWorkforce(list: Pick<AgentDTO, "status">[]): WorkforceCount
   return counts;
 }
 
-/** Everything the Command Centre needs in one round-trip. */
+/** Per-section visibility, each derived from a different human permission. */
+export interface DashboardScopes {
+  company: AccessScope;
+  agent: AccessScope;
+  task: AccessScope;
+  approval: AccessScope;
+  cost: AccessScope;
+  audit: AccessScope;
+}
+
+const ALL_SCOPES: DashboardScopes = {
+  company: FULL_SCOPE,
+  agent: FULL_SCOPE,
+  task: FULL_SCOPE,
+  approval: FULL_SCOPE,
+  cost: FULL_SCOPE,
+  audit: FULL_SCOPE,
+};
+
+/**
+ * Everything the Command Centre needs in one round-trip. Callers MUST pass
+ * the principal's scopes; the default (everything) is for internal use and tests.
+ */
 export async function dashboardSummary(
   db: Database,
   companyRef?: string | null,
+  scopes: DashboardScopes = ALL_SCOPES,
 ): Promise<DashboardSummaryDTO> {
   const scope = await resolveCompany(db, companyRef);
   const companyId = scope?.id ?? null;
+  const s = (x: AccessScope) => (companyId ? narrowScope(x, companyId) : x);
 
   const [companies, agentList, taskList, approvalList, activity, usage, seedCheck] =
     await Promise.all([
-      listCompanySummaries(db),
-      listAgents(db, { companyId }),
-      listTasks(db, { companyId, statuses: [...OPEN_TASK_STATUSES, "failed"], limit: 50 }),
-      listApprovals(db, { companyId, status: "pending", limit: 20 }),
-      listAuditEvents(db, { companyId, limit: 30 }),
-      usageSummary(db, companyId),
+      listCompanySummaries(db, scopes.company),
+      listAgents(db, { companyId, scope: s(scopes.agent) }),
+      listTasks(db, {
+        statuses: [...OPEN_TASK_STATUSES, "failed"],
+        limit: 50,
+        scope: s(scopes.task),
+      }),
+      listApprovals(db, { status: "pending", limit: 20, scope: s(scopes.approval) }),
+      listAuditEvents(db, { limit: 30, scope: s(scopes.audit) }),
+      usageSummary(db, companyId, s(scopes.cost)),
       db.execute<{ seeded: boolean }>(sql`select (
       exists(select 1 from ${agents} where ${agents.origin} = 'dev_seed') or
       exists(select 1 from ${tasks} where ${tasks.origin} = 'dev_seed') or

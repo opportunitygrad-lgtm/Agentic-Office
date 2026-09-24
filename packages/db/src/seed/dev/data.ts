@@ -742,3 +742,63 @@ export const SEED_USAGE_PROFILE: Record<ProviderType, { daily: number; model: st
 };
 
 export const SEED_COMPANY_SPLIT: Record<string, number> = { [EPT]: 0.46, [PA]: 0.18, [OG]: 0.36 };
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ *  DEVELOPMENT SEED ACCOUNTS — NEVER USE IN PRODUCTION
+ *  Loaded only by `pnpm db:seed`, which refuses to run when
+ *  NODE_ENV=production. Documented in docs/DEVELOPMENT.md.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+export const DEV_SEED_PASSWORD = "aibos-dev-only-password";
+
+export interface SeedUser {
+  email: string;
+  firstName: string;
+  lastName: string;
+  status?: "active" | "disabled";
+  memberships: { company: string | null; role: string; departments?: string[] }[];
+}
+
+export const SEED_USERS: SeedUser[] = [
+  {
+    email: "owner@aibos.example",
+    firstName: "Platform",
+    lastName: "Owner",
+    memberships: [{ company: null, role: "platform_owner" }],
+  },
+  {
+    email: "group.admin@aibos.example",
+    firstName: "Group",
+    lastName: "Admin",
+    memberships: [
+      { company: EPT, role: "group_admin" },
+      { company: OG, role: "group_admin" },
+    ],
+  },
+  {
+    email: "ept.manager@aibos.example",
+    firstName: "EPT",
+    lastName: "Manager",
+    memberships: [{ company: EPT, role: "company_manager" }],
+  },
+  {
+    email: "pa.manager@aibos.example",
+    firstName: "PilotsAssist",
+    lastName: "Manager",
+    memberships: [{ company: PA, role: "company_manager" }],
+  },
+  {
+    email: "og.marketing@aibos.example",
+    firstName: "Opportunitygrad",
+    lastName: "Marketing",
+    memberships: [{ company: OG, role: "department_manager", departments: ["marketing"] }],
+  },
+  {
+    email: "disabled@aibos.example",
+    firstName: "Disabled",
+    lastName: "Account",
+    status: "disabled",
+    memberships: [{ company: EPT, role: "staff" }],
+  },
+];

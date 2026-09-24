@@ -17,6 +17,7 @@ import {
 import { AGENT_STATUS_META, EmptyState, MockBadge, StatusDot, StatusPill, cn } from "@aibos/ui";
 import { AgentCompanies, ProviderTag } from "../dashboard/AgentCard";
 import { Dialog } from "../common/Dialog";
+import { AgentAuthorityPanel } from "./AgentAuthorityPanel";
 
 export interface AgentFilterState {
   q: string;
@@ -273,6 +274,9 @@ function AgentDetail({ agent: a }: { agent: AgentDTO }) {
           <MockBadge label="Development seed agent" />
         </div>
       )}
+      <Section title="Access & Authority">
+        <AgentAuthorityPanel agentId={a.id} />
+      </Section>
       <Section title="Configuration">
         <dl className="grid grid-cols-1 gap-x-6 gap-y-2.5 text-[12.5px] sm:grid-cols-2">
           {facts.map(([k, v]) => (

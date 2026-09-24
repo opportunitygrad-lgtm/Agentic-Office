@@ -11,6 +11,7 @@ import { CompanySwitcher } from "./CompanySwitcher";
 import { HealthIndicator } from "./HealthIndicator";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+import { UserMenu } from "./UserMenu";
 
 export function AppShell({
   shell,
@@ -89,6 +90,7 @@ export function AppShell({
               <span className="hidden md:inline">pending</span>
             </Link>
             <ThemeToggle />
+            <UserMenu />
           </div>
         </header>
         <main

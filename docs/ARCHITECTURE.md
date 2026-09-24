@@ -77,9 +77,9 @@ AUDIT LOG                        audit_events (append-only)
    live-session controls are disabled.
 9. **BullMQ 6 + Redis** for queues; the worker writes a heartbeat key the API
    reads for the header's system-health indicator.
-10. **Authentication deferred to Stage 02.** Requests act as `dev-user`; the
-    `Actor` abstraction already threads user, IP, user agent and request id
-    into audit events so Stage 02 only has to supply a real identity.
+10. **Authentication (Stage 02).** Server-side sessions with argon2id
+    passwords, company-scoped RBAC and a separate agent authority model —
+    see the sections below. The Stage 01 `dev-user` assumption is gone.
 
 ## Request flow (example: Add Company)
 
@@ -118,3 +118,120 @@ document_analysis, email_drafting.
   (`--series-1..4`: Claude, OpenAI, Grok, Local), never status colours.
 - Motion is subtle (status pulse, progress sheen, live-view scan) and
   disabled under `prefers-reduced-motion`.
+
+## Authentication (Stage 02)
+
+**Choice: first-party server-side sessions** following the Lucia / Copenhagen
+Book design, built from maintained primitives — `@node-rs/argon2` (argon2id
+password hashing), Node `crypto` (CSPRNG tokens, SHA-256) and
+`@fastify/cookie`. No custom cryptography.
+
+Why not a library such as better-auth or Auth.js? Both are capable, but they
+own their own user/session/account tables and route handlers, and Auth.js
+discourages credentials sign-in with database sessions. Our requirements —
+company-scoped RBAC, a separate agent principal, service identities and
+audit on every event — sit on our own schema and Fastify middleware, and
+the session layer is ~100 lines of well-understood code. No hosted or paid
+dependency, no vendor lock-in. OAuth/SSO, MFA and passkeys can be added as
+additional _authentication methods_ that create the same sessions
+(`sessions.auth_level` is reserved for MFA strength).
+
+### Sessions
+
+```
+Browser ──(HttpOnly cookie aibos_session=<256-bit token>)──► Next.js /api rewrite ──► Fastify
+                                                                                       │ SHA-256(token)
+                                                                                       ▼
+                                                                     sessions.id → users (status must be active)
+```
+
+- Token: 32 random bytes (base64url). The database stores only `SHA-256(token)`.
+- Cookie: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` in production.
+  Never in localStorage.
+- Expiry: 24 h sliding idle timeout (extended at most every 5 min) capped by a
+  7-day absolute lifetime.
+- Rotation: every sign-in issues a new session and revokes any session
+  presented with the request. Logout, password reset and account
+  disable/suspend revoke server-side (`revoked_at`, `revoked_reason`).
+- Every request re-validates the session and the user's status, then loads
+  the principal's access context — a disabled user is locked out on the next request.
+- CSRF: `SameSite=Lax` cookies + an `Origin` allow-list on every unsafe
+  method + JSON-only bodies (`text/plain` and form posts get 415).
+
+### Web integration
+
+- `apps/web/src/proxy.ts` (Next 16 "proxy", formerly middleware) redirects
+  requests without a session cookie to `/login?next=…` (open-redirect safe).
+- The `(app)` route group layout calls `/v1/auth/me`; 401 → `/login`,
+  disabled → `/account-disabled`. Server components forward only the
+  session cookie to the API.
+- Client code never sees the token. UI permission checks (`useCan`, `IfCan`)
+  only hide controls; the API is the authority.
+
+## Authorization (Stage 02)
+
+Two **separate principal types** with separate catalogues, evaluated by
+pure functions in `@aibos/access-core`:
+
+|          | Humans                                                        | AI agents                                                      |
+| -------- | ------------------------------------------------------------- | -------------------------------------------------------------- |
+| Identity | `users` + `sessions`                                          | `agents` (Stage 01)                                            |
+| Grants   | roles → permissions via `company_memberships` (+ departments) | `agent_permission_grants` (tool.* / action.*) + autonomy level |
+| Question | `can(ctx, "approval.financial", companyId)`                   | `canAgent(agentId, companyId, "tool.email.send")`              |
+| Default  | deny                                                          | deny                                                           |
+
+A third principal, **internal service identities** (`service_identities`:
+worker, scheduler, email-monitor, meta-webhook, website-monitor,
+browser-worker, bootstrap-cli, dev-seed), exists for audit attribution:
+actions show `actor_type = service` rather than pretending a human acted.
+
+### Human authorization
+
+1. **Permissions** are granular keys (`company.view`, `approval.financial`, …),
+   grouped into categories for the UI (`HUMAN_PERMISSIONS`).
+2. **Roles** map to permissions (`role_permissions`). System roles
+   (Platform Owner, Group Admin, Company Owner, Company Manager, Department
+   Manager, Staff, Viewer) are code-owned and read-only; custom roles are editable.
+   Decisions are never based on role names.
+3. **Memberships** bind a user to a company (or to _all_ companies when
+   `company_id` is NULL) with one role, and optionally restrict it to
+   departments (`membership_departments`).
+4. **Access context** (`HumanAccessContext`) = global permissions + permissions
+   per company + department restrictions, built once per request.
+5. **Company isolation.** Every company-scoped repository query takes an
+   `AccessScope` (`companyIds`, `includeGroup`, `departments`) derived by
+   `scopeFor(req, permission)`; `?company=` is resolved by `companyScope()`,
+   which returns an identical 403 for forbidden and unknown companies (for
+   non-global users) and audits attempts on real ones. Global agents never
+   leak another company's task titles; group-level rows (`company_id` NULL)
+   are only visible with global access.
+6. **Anti-escalation.** Granting a role requires holding every permission in
+   it (security admins excepted); acting on a user requires dominating all of
+   their roles; self-changes, last-Platform-Owner removal and system-role
+   edits are rejected and audited (`security.privilege_change_denied`).
+7. **Approval authority** is data-driven: `approval_requirements` maps
+   approval type + minimum risk to required permissions (e.g.
+   `ad_budget_increase` → `approval.financial`; high/critical →
+   `approval.high_risk`; all → `approval.decide`). Each approval stores its
+   `required_permissions`; the API checks them on decide and exposes
+   `viewerCanDecide` for the UI. Multi-person approval can be added by
+   extending rules with a quorum (Stage 33).
+
+### Agent authorization
+
+`evaluateAgentPermission` (wrapped by `canAgent` in `@aibos/db`) applies, in order:
+agent exists → autonomy not disabled → agent not paused/failed/offline →
+agent serves the company → grant exists (company-specific overrides global,
+default deny) → explicit deny → autonomy ceiling → grant `require_approval`
+→ agent approval gates. Autonomy ladder:
+
+| Level                 | Behaviour                                                                               |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| L0 Disabled           | Nothing executes                                                                        |
+| L1 Observe            | Low-risk reads only                                                                     |
+| L2 Limited operator   | Low/medium risk if granted; high risk denied                                            |
+| L3 Approval-gated     | High-risk actions always return `require_approval`                                      |
+| L4 Trusted automation | Granted actions run, except financial and destructive actions which always need a human |
+
+Every decision is subject (in later stages) to cost policies (Stage 11),
+company rules (Stage 03) and the execution controller (Stage 06).

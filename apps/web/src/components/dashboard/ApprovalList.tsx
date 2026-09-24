@@ -1,8 +1,9 @@
-import { ArrowRight, BadgeCheck, Check, X } from "lucide-react";
+import { ArrowRight, BadgeCheck } from "lucide-react";
 import { APPROVAL_TYPE_LABELS, type ApprovalDTO } from "@aibos/shared";
-import { APPROVAL_STATUS_META, Button, EmptyState, RISK_META, StatusPill } from "@aibos/ui";
+import { APPROVAL_STATUS_META, EmptyState, RISK_META, StatusPill } from "@aibos/ui";
 import { relativeTime } from "@/lib/format";
 import { CompanyChip } from "../common/CompanyChip";
+import { ApprovalActions } from "./ApprovalActions";
 
 function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -70,38 +71,32 @@ export function ApprovalCard({ approval }: { approval: ApprovalDTO }) {
       {approval.beforeState && approval.afterState && (
         <Diff before={approval.beforeState} after={approval.afterState} />
       )}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2 text-[12px] text-fg-muted">
+      <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12px]">
+        <dt className="text-fg-faint">Company</dt>
+        <dd className="min-w-0">
           <CompanyChip company={approval.company} />
-          {approval.agent && (
-            <span className="truncate text-fg-faint">· {approval.agent.name}</span>
-          )}
-        </div>
-        {approval.status === "pending" && (
-          <div
-            className="flex gap-1.5"
-            title="Approval decisions are enabled in Stage 33 (Approval engine)"
-          >
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<X className="size-3.5" />}
-              disabled
-              aria-disabled="true"
-            >
-              Reject
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              icon={<Check className="size-3.5" />}
-              disabled
-              aria-disabled="true"
-            >
-              Approve
-            </Button>
-          </div>
-        )}
+        </dd>
+        <dt className="text-fg-faint">Agent</dt>
+        <dd className="truncate text-fg-muted">{approval.agent?.name ?? "—"}</dd>
+        <dt className="text-fg-faint">Task</dt>
+        <dd className="truncate text-fg-muted">{approval.task?.title ?? "—"}</dd>
+        <dt className="text-fg-faint">Requires</dt>
+        <dd className="flex flex-wrap gap-1">
+          {approval.requiredPermissions
+            .filter((p) => p !== "approval.decide")
+            .concat(approval.requiredPermissions.length === 1 ? ["approval.decide"] : [])
+            .map((p) => (
+              <code
+                key={p}
+                className="rounded bg-surface-2 px-1 font-mono text-[10.5px] text-fg-muted ring-1 ring-inset ring-line"
+              >
+                {p}
+              </code>
+            ))}
+        </dd>
+      </dl>
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <ApprovalActions approval={approval} />
       </div>
     </article>
   );

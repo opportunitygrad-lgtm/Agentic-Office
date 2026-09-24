@@ -23,8 +23,18 @@ import {
   tasks,
   type Agent,
 } from "../schema";
+import { applyTemplateGrants } from "./agent-authority";
 import { recordAuditEvent } from "./audit";
-import { iso, type Actor } from "./util";
+import {
+  FULL_SCOPE,
+  actorAuditFields,
+  departmentVisible,
+  iso,
+  scopeAllows,
+  scopeWhere,
+  type AccessScope,
+  type Actor,
+} from "./util";
 
 export interface AgentFilters {
   companyId?: string | null;
@@ -35,6 +45,8 @@ export interface AgentFilters {
   provider?: ProviderType;
   q?: string;
   ids?: string[];
+  /** Caller's visible companies (company isolation). Defaults to everything. */
+  scope?: AccessScope;
 }
 
 /** Rank for choosing an agent's "current" task among several open tasks. */
@@ -67,6 +79,19 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
       or(ilike(agents.name, `%${filters.q}%`), ilike(agents.description, `%${filters.q}%`))!,
     );
   if (filters.ids) where.push(filters.ids.length ? inArray(agents.id, filters.ids) : sql`false`);
+  const scope = filters.scope ?? FULL_SCOPE;
+  if (scope.companyIds !== "all") {
+    const visible = [...scope.companyIds];
+    // Global agents serve every company; company agents must serve a visible company.
+    where.push(
+      visible.length
+        ? or(
+            eq(agents.scope, "global"),
+            sql`${agents.id} in (select ${agentCompanyAssignments.agentId} from ${agentCompanyAssignments} where ${inArray(agentCompanyAssignments.companyId, visible)})`,
+          )!
+        : sql`false`,
+    );
+  }
 
   const rows = await db
     .select({
@@ -99,7 +124,12 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
       })
       .from(agentCompanyAssignments)
       .innerJoin(companies, eq(companies.id, agentCompanyAssignments.companyId))
-      .where(inArray(agentCompanyAssignments.agentId, ids))
+      .where(
+        and(
+          inArray(agentCompanyAssignments.agentId, ids),
+          scopeWhere(agentCompanyAssignments.companyId, scope),
+        ),
+      )
       .orderBy(companies.createdAt),
     db
       .select({
@@ -112,7 +142,12 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
       })
       .from(tasks)
       .where(
-        and(inArray(tasks.assignedAgentId, ids), inArray(tasks.status, [...OPEN_TASK_STATUSES])),
+        and(
+          inArray(tasks.assignedAgentId, ids),
+          inArray(tasks.status, [...OPEN_TASK_STATUSES]),
+          // Never reveal a task title from a company the caller cannot see.
+          scopeWhere(tasks.companyId, scope),
+        ),
       ),
   ]);
 
@@ -141,54 +176,66 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
     }
   }
 
-  return rows.map(({ agent: a, dept, managerName }) => {
-    const current = currentByAgent.get(a.id);
-    return {
-      id: a.id,
-      name: a.name,
-      slug: a.slug,
-      description: a.description,
-      templateKey: a.templateKey as AgentTemplateKey,
-      scope: a.scope,
-      status: a.status,
-      department: dept?.id ? dept : null,
-      reportsTo:
-        a.reportsToAgentId && managerName ? { id: a.reportsToAgentId, name: managerName } : null,
-      companies: companiesByAgent.get(a.id) ?? [],
-      primaryProvider: a.primaryProvider,
-      fallbackProvider: a.fallbackProvider,
-      preferredModel: a.preferredModel,
-      autonomyLevel: a.autonomyLevel,
-      responsibilities: a.responsibilities,
-      prohibitedActions: a.prohibitedActions,
-      allowedTools: a.allowedTools,
-      readPermissions: a.readPermissions,
-      writePermissions: a.writePermissions,
-      approvalRequirements: a.approvalRequirements,
-      perTaskBudget: a.perTaskBudget,
-      dailyBudget: a.dailyBudget,
-      maxExternalSearches: a.maxExternalSearches,
-      maxRetries: a.maxRetries,
-      concurrencyLimit: a.concurrencyLimit,
-      isTemporary: a.isTemporary,
-      currentTask: current
-        ? {
-            id: current.id,
-            title: current.title,
-            progress: current.progress,
-            status: current.status,
-          }
-        : null,
-      lastActiveAt: iso(a.lastActiveAt),
-      origin: a.origin,
-      createdAt: a.createdAt.toISOString(),
-      updatedAt: a.updatedAt.toISOString(),
-    };
-  });
+  const inDepartmentScope = (a: (typeof rows)[number]["agent"]) => {
+    if (!scope.departments?.size) return true;
+    const serves =
+      a.scope === "global" ? null : (companiesByAgent.get(a.id) ?? []).map((c) => c.id);
+    const candidates = serves ?? (scope.companyIds === "all" ? [null] : [...scope.companyIds]);
+    return candidates.some(
+      (c) => (c === null || scopeAllows(scope, c)) && departmentVisible(scope, c, a.departmentId),
+    );
+  };
+
+  return rows
+    .filter((r) => inDepartmentScope(r.agent))
+    .map(({ agent: a, dept, managerName }) => {
+      const current = currentByAgent.get(a.id);
+      return {
+        id: a.id,
+        name: a.name,
+        slug: a.slug,
+        description: a.description,
+        templateKey: a.templateKey as AgentTemplateKey,
+        scope: a.scope,
+        status: a.status,
+        department: dept?.id ? dept : null,
+        reportsTo:
+          a.reportsToAgentId && managerName ? { id: a.reportsToAgentId, name: managerName } : null,
+        companies: companiesByAgent.get(a.id) ?? [],
+        primaryProvider: a.primaryProvider,
+        fallbackProvider: a.fallbackProvider,
+        preferredModel: a.preferredModel,
+        autonomyLevel: a.autonomyLevel,
+        responsibilities: a.responsibilities,
+        prohibitedActions: a.prohibitedActions,
+        allowedTools: a.allowedTools,
+        readPermissions: a.readPermissions,
+        writePermissions: a.writePermissions,
+        approvalRequirements: a.approvalRequirements,
+        perTaskBudget: a.perTaskBudget,
+        dailyBudget: a.dailyBudget,
+        maxExternalSearches: a.maxExternalSearches,
+        maxRetries: a.maxRetries,
+        concurrencyLimit: a.concurrencyLimit,
+        isTemporary: a.isTemporary,
+        currentTask: current
+          ? {
+              id: current.id,
+              title: current.title,
+              progress: current.progress,
+              status: current.status,
+            }
+          : null,
+        lastActiveAt: iso(a.lastActiveAt),
+        origin: a.origin,
+        createdAt: a.createdAt.toISOString(),
+        updatedAt: a.updatedAt.toISOString(),
+      };
+    });
 }
 
-export async function getAgent(db: Database, id: string): Promise<AgentDTO> {
-  const [agent] = await listAgents(db, { ids: [id] });
+export async function getAgent(db: Database, id: string, scope?: AccessScope): Promise<AgentDTO> {
+  const [agent] = await listAgents(db, { ids: [id], scope });
   if (!agent) throw new NotFoundError("Agent", id);
   return agent;
 }
@@ -248,6 +295,7 @@ export async function createAgent(
       .returning();
     if (!agent) throw new Error("Agent insert failed");
 
+    await applyTemplateGrants(tx, agent.id, data.templateKey, origin);
     if (data.companyIds.length) {
       await tx.insert(agentCompanyAssignments).values(
         data.companyIds.map((companyId, i) => ({
@@ -261,9 +309,11 @@ export async function createAgent(
     await recordAuditEvent(
       tx,
       {
+        ...actorAuditFields(actor),
         agentId: agent.id,
         companyId: data.companyIds[0],
-        actorUser: actor.kind === "human" ? actor.ref : undefined,
+        resourceType: "agent",
+        resourceId: agent.id,
         action: "agent.created",
         description: `Agent "${agent.name}" created from template ${tpl.name}`,
         metadata: { templateKey: data.templateKey, companyIds: data.companyIds, actor: actor.ref },
@@ -307,8 +357,10 @@ export async function setAgentCompanies(
         );
     }
     await recordAuditEvent(tx, {
+      ...actorAuditFields(actor),
       agentId,
-      actorUser: actor.kind === "human" ? actor.ref : undefined,
+      resourceType: "agent",
+      resourceId: agentId,
       action: "agent.assignments_changed",
       description: `Company assignments updated for "${agent.name}"`,
       before: { companyIds: before.map((b) => b.companyId) },

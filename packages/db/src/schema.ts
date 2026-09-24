@@ -23,6 +23,12 @@ import {
 } from "drizzle-orm/pg-core";
 import {
   ACTOR_KINDS,
+  ACTOR_TYPES,
+  AUTH_TOKEN_TYPES,
+  GRANT_EFFECT_VALUES,
+  MEMBERSHIP_STATUSES,
+  ROLE_SCOPES,
+  USER_STATUSES,
   AGENT_SCOPES,
   AGENT_STATUSES,
   APPROVAL_STATUSES,
@@ -49,7 +55,13 @@ export const providerType = pgEnum("provider_type", PROVIDER_TYPES);
 export const companyStatus = pgEnum("company_status", COMPANY_STATUSES);
 export const agentStatus = pgEnum("agent_status", AGENT_STATUSES);
 export const agentScope = pgEnum("agent_scope", AGENT_SCOPES);
-export const autonomyLevel = pgEnum("autonomy_level", AUTONOMY_LEVELS);
+export const agentAutonomy = pgEnum("agent_autonomy", AUTONOMY_LEVELS);
+export const userStatus = pgEnum("user_status", USER_STATUSES);
+export const membershipStatus = pgEnum("membership_status", MEMBERSHIP_STATUSES);
+export const roleScope = pgEnum("role_scope", ROLE_SCOPES);
+export const actorType = pgEnum("actor_type", ACTOR_TYPES);
+export const authTokenType = pgEnum("auth_token_type", AUTH_TOKEN_TYPES);
+export const grantEffect = pgEnum("grant_effect", GRANT_EFFECT_VALUES);
 export const taskStatus = pgEnum("task_status", TASK_STATUSES);
 export const taskPriority = pgEnum("task_priority", TASK_PRIORITIES);
 export const taskType = pgEnum("task_type", TASK_TYPES);
@@ -158,7 +170,7 @@ export const agentTemplates = pgTable("agent_templates", {
   departmentSlug: text("department_slug").notNull(),
   defaultProvider: providerType("default_provider").notNull(),
   fallbackProvider: providerType("fallback_provider"),
-  defaultAutonomy: autonomyLevel("default_autonomy").notNull(),
+  defaultAutonomy: agentAutonomy("autonomy").notNull().default("observe"),
   responsibilities: textList("responsibilities"),
   defaultTools: textList("default_tools"),
   prohibitedActions: textList("prohibited_actions"),
@@ -192,7 +204,7 @@ export const agents = pgTable(
     primaryProvider: providerType("primary_provider").notNull().default("CLAUDE"),
     fallbackProvider: providerType("fallback_provider"),
     preferredModel: text("preferred_model"),
-    autonomyLevel: autonomyLevel("autonomy_level").notNull().default("suggest"),
+    autonomyLevel: agentAutonomy("autonomy").notNull().default("observe"),
     systemInstructions: text("system_instructions"),
     responsibilities: textList("responsibilities"),
     prohibitedActions: textList("prohibited_actions"),
@@ -310,8 +322,13 @@ export const approvals = pgTable(
     status: approvalStatus("status").notNull().default("pending"),
     requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
-    /** Future: FK to users (Stage 02). Free-text actor reference until then. */
+    /** Human permissions required to decide (computed from approval_requirements). */
+    requiredPermissions: textList("required_permissions"),
+    /** Display label of the decider (email); decidedByUserId is authoritative. */
     decidedBy: text("decided_by"),
+    decidedByUserId: uuid("decided_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
     decisionNotes: text("decision_notes"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     origin: origin(),
@@ -331,7 +348,16 @@ export const auditEvents = pgTable(
     companyId: uuid("company_id").references(() => companies.id, { onDelete: "set null" }),
     agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
     taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    /** Principal type: human | agent | service | system | anonymous. */
+    actorType: actorType("actor_type").notNull().default("system"),
+    /** Display label (email / service name). IDs below are authoritative. */
     actorUser: text("actor_user"),
+    actorUserId: uuid("actor_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    actorServiceId: text("actor_service_id").references((): AnyPgColumn => serviceIdentities.key),
+    resourceType: text("resource_type"),
+    resourceId: text("resource_id"),
     /** Namespaced verb, e.g. company.created, email.sent, meta.campaign_paused. */
     action: text("action").notNull(),
     tool: text("tool"),
@@ -352,6 +378,7 @@ export const auditEvents = pgTable(
     index("audit_occurred_idx").on(t.occurredAt),
     index("audit_company_idx").on(t.companyId, t.occurredAt),
     index("audit_action_idx").on(t.action),
+    index("audit_actor_user_idx").on(t.actorUserId, t.occurredAt),
   ],
 );
 
@@ -438,6 +465,225 @@ export const budgetPolicies = pgTable(
   ],
 );
 
+/* ---------- humans, sessions & access (Stage 02) ---------- */
+
+export const users = pgTable(
+  "users",
+  {
+    id: id(),
+    email: text("email").notNull(),
+    /** Lower-cased, trimmed; the uniqueness key. */
+    emailNormalized: text("email_normalized").notNull(),
+    firstName: text("first_name"),
+    lastName: text("last_name"),
+    displayName: text("display_name"),
+    avatarUrl: text("avatar_url"),
+    /** argon2id PHC string. NULL until an invitation is accepted. Never returned by the API. */
+    passwordHash: text("password_hash"),
+    status: userStatus("status").notNull().default("invited"),
+    timezone: text("timezone"),
+    locale: text("locale"),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("users_email_normalized_uq").on(t.emailNormalized)],
+);
+
+/**
+ * Server-side sessions. `id` is SHA-256(token) — the raw token only ever
+ * exists in the HttpOnly cookie, so a database leak cannot hijack sessions.
+ */
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Sliding expiry (idle timeout). */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Hard cap regardless of activity. */
+    absoluteExpiresAt: timestamp("absolute_expires_at", { withTimezone: true }).notNull(),
+    ipAddress: inet("ip_address"),
+    userAgent: text("user_agent"),
+    /** Future MFA / WebAuthn: authentication strength of this session. */
+    authLevel: text("auth_level").notNull().default("password"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+  },
+  (t) => [index("sessions_user_idx").on(t.userId)],
+);
+
+/** Single-use, expiring tokens (password reset, invitation). Stored hashed. */
+export const authTokens = pgTable(
+  "auth_tokens",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: authTokenType("type").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("auth_tokens_hash_uq").on(t.tokenHash),
+    index("auth_tokens_user_idx").on(t.userId, t.type),
+  ],
+);
+
+export const permissions = pgTable("permissions", {
+  key: text("key").primaryKey(),
+  category: text("category").notNull(),
+  label: text("label").notNull(),
+  description: text("description").notNull(),
+  scope: roleScope("scope").notNull().default("company"),
+  sensitive: boolean("sensitive").notNull().default(false),
+});
+
+export const roles = pgTable(
+  "roles",
+  {
+    id: id(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    scope: roleScope("scope").notNull().default("company"),
+    /** Company-specific custom role; NULL = available everywhere. */
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    /** System roles are code-owned: permissions are synced and read-only. */
+    isSystem: boolean("is_system").notNull().default(false),
+    rank: integer("rank").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("roles_key_uq").on(t.key)],
+);
+
+export const rolePermissions = pgTable(
+  "role_permissions",
+  {
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => roles.id, { onDelete: "cascade" }),
+    permissionKey: text("permission_key")
+      .notNull()
+      .references(() => permissions.key, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.roleId, t.permissionKey] })],
+);
+
+/**
+ * Human ↔ company membership with one role. company_id NULL = global
+ * membership that applies to every company (platform owner, group admin).
+ */
+export const companyMemberships = pgTable(
+  "company_memberships",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => roles.id),
+    status: membershipStatus("status").notNull().default("invited"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }),
+    invitedByUserId: uuid("invited_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("memberships_user_company_uq").on(t.userId, t.companyId).nullsNotDistinct(),
+    index("memberships_company_idx").on(t.companyId),
+  ],
+);
+
+/** Optional department restriction: a membership with rows here only covers those departments. */
+export const membershipDepartments = pgTable(
+  "membership_departments",
+  {
+    membershipId: uuid("membership_id")
+      .notNull()
+      .references(() => companyMemberships.id, { onDelete: "cascade" }),
+    departmentId: uuid("department_id")
+      .notNull()
+      .references(() => departments.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.membershipId, t.departmentId] })],
+);
+
+/** Data-driven approval authority: which human permission decides which approval. */
+export const approvalRequirements = pgTable(
+  "approval_requirements",
+  {
+    id: id(),
+    /** Approval type or "*" for every type. */
+    approvalType: text("approval_type").notNull(),
+    minRiskLevel: riskLevel("min_risk_level"),
+    requiredPermission: text("required_permission")
+      .notNull()
+      .references(() => permissions.key),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("approval_req_uq")
+      .on(t.approvalType, t.minRiskLevel, t.requiredPermission, t.companyId)
+      .nullsNotDistinct(),
+  ],
+);
+
+/* ---------- agent authority (Stage 02) ---------- */
+
+/** Agent tool/action grants; company_id NULL = every company the agent serves. */
+export const agentPermissionGrants = pgTable(
+  "agent_permission_grants",
+  {
+    id: id(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    permission: text("permission").notNull(),
+    effect: grantEffect("effect").notNull(),
+    /** Future constraints (amount caps, domains...). */
+    constraints: jsonb("constraints").$type<Record<string, unknown>>().notNull().default({}),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [unique("agent_grants_uq").on(t.agentId, t.companyId, t.permission).nullsNotDistinct()],
+);
+
+/* ---------- internal service identities (Stage 02) ---------- */
+
+export const serviceIdentities = pgTable("service_identities", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: createdAt(),
+});
+
 /* ---------- relations (for relational queries) ---------- */
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -493,3 +739,8 @@ export type Integration = typeof integrations.$inferSelect;
 export type Department = typeof departments.$inferSelect;
 export type AiUsageRecord = typeof aiUsageRecords.$inferSelect;
 export type BudgetPolicy = typeof budgetPolicies.$inferSelect;
+export type User = typeof users.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
+export type Role = typeof roles.$inferSelect;
+export type CompanyMembership = typeof companyMemberships.$inferSelect;
+export type AgentPermissionGrant = typeof agentPermissionGrants.$inferSelect;

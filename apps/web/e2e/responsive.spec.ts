@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
- * Stage 01 E2E smoke: every primary route renders without page-level
- * horizontal overflow at the target breakpoints. Requires `pnpm dev`.
+ * E2E smoke (requires `pnpm dev` and the development seed). Signs in with the
+ * DEVELOPMENT SEED accounts documented in docs/DEVELOPMENT.md.
  */
+const PASSWORD = "aibos-dev-only-password";
 const ROUTES = [
   "/",
   "/companies",
@@ -17,12 +18,45 @@ const ROUTES = [
   "/audit",
   "/integrations",
   "/settings",
+  "/settings/users",
+  "/settings/roles",
   "/leads",
 ];
 const WIDTHS = [1920, 1440, 1280, 1024, 768, 390];
 
-for (const width of WIDTHS) {
-  test(`no horizontal overflow at ${width}px`, async ({ page }) => {
+async function signIn(page: Page, email: string) {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((u) => !u.pathname.startsWith("/login"));
+}
+
+test("unauthenticated visitors are redirected to sign in", async ({ page }) => {
+  await page.goto("/approvals");
+  await expect(page).toHaveURL(/\/login\?next=%2Fapprovals/);
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+});
+
+test("sign in, see only permitted companies, sign out", async ({ page }) => {
+  await signIn(page, "ept.manager@aibos.example");
+  await expect(page.getByRole("heading", { level: 1, name: "Command Centre" })).toBeVisible();
+  const companies = page.getByRole("region", { name: "Companies" });
+  await expect(companies.getByText("Euro Pilot Training", { exact: true })).toBeVisible();
+  await expect(companies.getByText("PilotsAssist", { exact: true })).toHaveCount(0);
+  await page.goto("/?company=pilotsassist");
+  await expect(page.getByRole("heading", { name: "You don't have access" })).toBeVisible();
+  await page.getByRole("button", { name: /Account menu/ }).click();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test("no horizontal overflow on any page at target widths", async ({ page }) => {
+  test.setTimeout(240_000);
+  await signIn(page, "owner@aibos.example");
+  for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     for (const route of ROUTES) {
       const res = await page.goto(route);
@@ -32,21 +66,12 @@ for (const width of WIDTHS) {
       );
       expect(overflow, `${route} overflows at ${width}px`).toBeLessThanOrEqual(0);
     }
-  });
-}
-
-test("command centre shows the three seeded companies and navigation works", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Command Centre" })).toBeVisible();
-  for (const name of ["Euro Pilot Training", "PilotsAssist", "Opportunitygrad"]) {
-    await expect(
-      page.getByRole("region", { name: "Companies" }).getByText(name, { exact: true }),
-    ).toBeVisible();
   }
-  await page
-    .getByRole("navigation", { name: "Primary" })
-    .getByRole("link", { name: "Audit Log" })
-    .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Audit log" })).toBeVisible();
+  for (const route of ["/login", "/forgot-password", "/account-disabled"]) {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(route);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+    ).toBeLessThanOrEqual(0);
+  }
 });

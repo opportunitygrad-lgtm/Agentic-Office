@@ -1,4 +1,6 @@
 import type {
+  MeDTO,
+  UserDTO,
   AgentDTO,
   ApprovalDTO,
   AuditEventDTO,
@@ -90,7 +92,7 @@ export function agent(extra: Partial<AgentDTO> & Pick<AgentDTO, "id" | "name">):
     primaryProvider: "CLAUDE",
     fallbackProvider: "OPENAI",
     preferredModel: null,
-    autonomyLevel: "suggest",
+    autonomyLevel: "observe",
     responsibilities: ["Desk research"],
     prohibitedActions: ["Spend money"],
     allowedTools: ["browser"],
@@ -199,6 +201,10 @@ export const APPROVALS: ApprovalDTO[] = [
     explanation: "CPL below target",
     riskLevel: "high",
     proposedChange: null,
+    requiredPermissions: ["approval.decide", "approval.financial", "approval.high_risk"],
+    viewerCanDecide: false,
+    viewerMissingPermissions: ["approval.financial", "approval.high_risk"],
+    decidedByUserId: null,
     beforeState: { dailyBudget: 40 },
     afterState: { dailyBudget: 65 },
     status: "pending",
@@ -218,7 +224,12 @@ export const EVENTS: AuditEventDTO[] = [
     company: ept,
     agent: { id: "a2", name: "EPT Flight School Research" },
     taskId: "t2",
+    actorType: "agent",
     actorUser: null,
+    actorUserId: null,
+    actorServiceId: null,
+    resourceType: null,
+    resourceId: null,
     action: "browser.page_read",
     tool: "browser",
     provider: null,
@@ -303,4 +314,70 @@ export const SUMMARY: DashboardSummaryDTO = {
   },
   alerts: [],
   containsDevSeedData: true,
+};
+
+export function user(extra: Partial<UserDTO> & Pick<UserDTO, "id" | "email">): UserDTO {
+  return {
+    firstName: null,
+    lastName: null,
+    displayName: extra.email,
+    avatarUrl: null,
+    status: "active",
+    timezone: null,
+    locale: null,
+    isPlatformOwner: false,
+    lastLoginAt: null,
+    disabledAt: null,
+    createdAt: now,
+    memberships: [],
+    origin: "dev_seed",
+    ...extra,
+  };
+}
+
+const ALL_PERMS = [
+  "company.view",
+  "company.create",
+  "user.view",
+  "user.invite",
+  "user.role.assign",
+  "user.disable",
+  "security.manage",
+  "agent.view",
+  "agent.permissions.manage",
+  "approval.view",
+  "approval.decide",
+];
+
+export const ME_OWNER: MeDTO = {
+  user: user({
+    id: "u-owner",
+    email: "owner@aibos.example",
+    displayName: "Platform Owner",
+    isPlatformOwner: true,
+  }),
+  session: { expiresAt: now },
+  isPlatformOwner: true,
+  globalPermissions: ALL_PERMS,
+  companyPermissions: { [ept.id]: ALL_PERMS, [pa.id]: ALL_PERMS, [og.id]: ALL_PERMS },
+  accessibleCompanies: [ept, pa, og],
+};
+
+export const ME_EPT_MANAGER: MeDTO = {
+  user: user({ id: "u-ept", email: "ept.manager@aibos.example", displayName: "EPT Manager" }),
+  session: { expiresAt: now },
+  isPlatformOwner: false,
+  globalPermissions: [],
+  companyPermissions: {
+    [ept.id]: [
+      "company.view",
+      "agent.view",
+      "task.view",
+      "approval.view",
+      "approval.decide",
+      "user.view",
+      "user.invite",
+    ],
+  },
+  accessibleCompanies: [ept],
 };

@@ -12,6 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@aibos/access-core": "workspace:*",
     "@aibos/browser-core": "workspace:*",
     "@aibos/shared": "workspace:*",
     "@aibos/ui": "workspace:*",

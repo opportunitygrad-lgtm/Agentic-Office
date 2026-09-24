@@ -33,22 +33,106 @@
 If a secret is ever committed: revoke/rotate it at the provider immediately,
 then purge it from history. Deleting the file is not enough.
 
-## Current posture (Stage 01)
+## Password security
 
-- No authentication yet — **do not expose the stack to the internet**. The API
-  binds to `127.0.0.1` by default and CORS allows only `API_CORS_ORIGINS`.
-- Every request acts as `dev-user` (Stage 02 introduces users, sessions and
-  RBAC).
-- No live AI or integration calls are possible: adapters are placeholders.
-- HTTP hardening: `@fastify/helmet` on the API; `X-Content-Type-Options`,
-  `Referrer-Policy`, `X-Frame-Options: DENY` on the web app; no
-  `X-Powered-By`.
-- Development seed data refuses to load when `NODE_ENV=production` unless
-  `ALLOW_DEV_SEED=true`; `db:reset` is disabled in production.
-- Tests refuse to run against a database whose name does not contain `test`.
+- **Hashing:** argon2id via `@node-rs/argon2` (19 MiB memory, t=2, p=1 —
+  OWASP recommendation). Stored as a PHC string; never reversible, never
+  returned by any API response (`UserDTO` has no hash field; tests assert it).
+- **Policy:** 12–128 characters, not mostly whitespace, not a known-common
+  password (NIST SP 800-63B: length over composition rules).
+- **Reset tokens:** 256-bit random, stored as SHA-256, **single-use**, expire
+  after 60 minutes, newest token invalidates older ones. Completing a reset
+  revokes all of the user's sessions. Invalid, expired and used tokens are
+  indistinguishable (`invalid_token`).
+- **Invitations:** same token model, 7-day expiry; the link is shown once to
+  the inviter (email delivery arrives in Stage 14). Token lookups use POST
+  bodies so tokens never appear in API URLs or request logs.
+
+## Session security
+
+- Server-side sessions; the cookie holds a random token, the database holds
+  only its SHA-256 (a database leak cannot hijack sessions).
+- Cookie: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Secure` in production
+  (`COOKIE_SECURE` override). No tokens in localStorage or JS-readable storage.
+- 24 h sliding idle timeout, 7-day absolute lifetime; new session on every
+  sign-in (rotation); logout, password reset, suspension and disabling revoke
+  server-side immediately. Each request re-checks session **and** account status.
+- CSRF: SameSite cookies, `Origin` allow-list (`WEB_ORIGIN`, `API_CORS_ORIGINS`)
+  on every unsafe method, JSON-only bodies (`text/plain`/form posts → 415).
+- Audit logs store a 16-character session _reference_, never the token.
+
+## Login protection
+
+- Generic "Invalid email or password" for unknown users and wrong passwords;
+  unknown emails still run an argon2 verification (uniform timing).
+- Account status (disabled/suspended) is only revealed **after** the correct
+  password is supplied, so it cannot be used for enumeration.
+- Throttling (Redis fixed windows, in-memory fallback): 30 sign-in attempts /
+  15 min per IP; 5 failures / 15 min per account (→ 429); password-reset
+  requests 10/h per IP and 3/h per email; token endpoints 20 / 15 min per IP.
+- Failed, blocked and successful sign-ins are audited (`auth.*`).
+- Architecture is ready for MFA / WebAuthn / SSO: they become additional
+  authentication methods issuing the same sessions (`sessions.auth_level`).
+
+## Authorization & company isolation
+
+- Every `/v1` route requires a session except `auth/status`, `auth/login`,
+  `auth/logout`, password-reset and invitation endpoints; `GET /health`
+  is public but returns only `{status, checkedAt}` in production (details at
+  authenticated `/v1/system/health`).
+- 401 = not authenticated (`unauthenticated`, `session_expired`,
+  `account_disabled`); 403 = authenticated but not authorised.
+- Permissions, not role names, decide access. Company-scoped queries always
+  receive an `AccessScope` from the authenticated principal; `?company=` is
+  never trusted. For non-global users, unknown and forbidden companies return
+  the same 403 (no existence leak) and forbidden attempts on real companies
+  are audited as `security.unauthorized_access`.
+- IDOR guards: single agents, tasks, approvals, users and memberships are
+  loaded through the caller's scope; invisible records return 403/404.
+- Privilege escalation guards: no granting roles you don't fully hold, no
+  acting on users whose roles exceed yours, no self role/status changes, no
+  removing the last Platform Owner, system roles locked, company roles cannot
+  hold platform permissions. Denials are audited.
+- Approval decisions require every permission in `required_permissions`;
+  decisions are atomic (pending → approved/rejected exactly once) and audited.
+- Agents are a separate principal with default-deny `canAgent` evaluation;
+  no autonomy level bypasses permissions, and financial/destructive actions
+  always require a human.
+
+## Security logging
+
+- Append-only `audit_events` with `actor_type`, `actor_user_id` /
+  `actor_service_id` / `agent_id`, company, task, resource, request id,
+  session reference, IP and user agent.
+- API request logs redact cookies, authorization headers, `Set-Cookie` and
+  `token=` query parameters. Development-only password-reset links are
+  logged to the API console when no email transport exists; never in production.
+
+## Bootstrap administrator procedure
+
+1. Deploy, run migrations. Set `BOOTSTRAP_ADMIN_EMAIL` in the server environment.
+2. Run `pnpm auth:bootstrap` in a terminal on the server. It refuses to run if
+   **any** user exists (checked under a PostgreSQL advisory lock).
+3. Enter the password at the hidden prompt (or pipe it with
+   `--password-stdin` from a secret manager). It is validated against the
+   password policy and never written to disk, env files or logs.
+4. The Platform Owner is created with a global membership; the event is
+   audited as `SERVICE: bootstrap-cli` (`auth.bootstrap_admin_created`).
+5. Remove `BOOTSTRAP_ADMIN_EMAIL`. Further administrators are invited from
+   Settings → Users & Access.
+
+Development seed accounts (`*@aibos.example`) are never created in
+production: `pnpm db:seed` refuses when `NODE_ENV=production`.
+
+## Remaining exposure notes
+
+- Do not expose the stack publicly until deployment hardening (Stage 37/39):
+  TLS termination, `NODE_ENV=production`, correct `WEB_ORIGIN`, and a
+  reviewed CSP.
+- Email delivery for resets/invitations is not configured (Stage 14).
 
 ## Planned hardening
 
-Stage 02 (auth/RBAC), 12 (credential vault), 33 (approval engine), 34 (audit
-immutability/export), 38 (backups), 39 (rate limiting, CSP, dependency and
-secret scanning, pen-test fixes).
+Stage 12 (credential vault), 33 (approval engine: expiry, delegation,
+multi-person), 34 (audit immutability/export), 38 (backups), 39 (rate
+limiting at the edge, CSP, dependency and secret scanning, pen-test fixes).

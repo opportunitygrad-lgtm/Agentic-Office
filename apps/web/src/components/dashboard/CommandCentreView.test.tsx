@@ -1,12 +1,17 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import "@/test/next-navigation";
-import { SESSIONS, SUMMARY } from "@/test/fixtures";
+import { ME_EPT_MANAGER, ME_OWNER, SESSIONS, SUMMARY } from "@/test/fixtures";
+import { SessionProvider } from "../shell/SessionContext";
 import { CommandCentreView } from "./CommandCentreView";
 
 describe("CommandCentreView", () => {
   it("renders the command centre with companies, workforce, approvals, usage, live view, tasks and activity", () => {
-    render(<CommandCentreView summary={SUMMARY} sessions={SESSIONS} />);
+    render(
+      <SessionProvider me={ME_OWNER}>
+        <CommandCentreView summary={SUMMARY} sessions={SESSIONS} />
+      </SessionProvider>,
+    );
     expect(screen.getByRole("heading", { level: 1, name: "Command Centre" })).toBeInTheDocument();
 
     const companies = screen.getByRole("region", { name: "Companies" });
@@ -39,6 +44,15 @@ describe("CommandCentreView", () => {
       "Extracted course data",
     );
     expect(screen.getByText("Dev seed data")).toBeInTheDocument();
+  });
+
+  it("hides Add company from users without company.create", () => {
+    render(
+      <SessionProvider me={ME_EPT_MANAGER}>
+        <CommandCentreView summary={SUMMARY} sessions={[]} />
+      </SessionProvider>,
+    );
+    expect(screen.queryByRole("link", { name: /Add company/ })).not.toBeInTheDocument();
   });
 
   it("marks the selected company when scoped", () => {

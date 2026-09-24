@@ -8,6 +8,20 @@
       "when": 1790217064750,
       "tag": "0000_stage01_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790236498782,
+      "tag": "0001_stage02_auth_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790236511591,
+      "tag": "0002_stage02_drop_legacy_autonomy",
+      "breakpoints": true
     }
   ]
 }

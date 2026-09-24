@@ -24,8 +24,19 @@ import {
   type Agent,
   type Company,
 } from "../schema";
+import { applyTemplateGrants } from "./agent-authority";
 import { recordAuditEvent } from "./audit";
-import { isUuid, startOfUtcDay, startOfUtcMonth, ts, type Actor } from "./util";
+import {
+  FULL_SCOPE,
+  actorAuditFields,
+  isUuid,
+  scopeWhere,
+  startOfUtcDay,
+  startOfUtcMonth,
+  ts,
+  type AccessScope,
+  type Actor,
+} from "./util";
 
 export function toCompanyRef(c: Pick<Company, "id" | "name" | "slug" | "accentColor">): CompanyRef {
   return { id: c.id, name: c.name, slug: c.slug, accentColor: c.accentColor };
@@ -79,13 +90,27 @@ export async function resolveCompany(db: Database, ref?: string | null): Promise
   return row;
 }
 
-export async function listCompanies(db: Database): Promise<CompanyDTO[]> {
-  const rows = await db.select().from(companies).orderBy(companies.createdAt, companies.name);
+export async function listCompanies(
+  db: Database,
+  scope: AccessScope = FULL_SCOPE,
+): Promise<CompanyDTO[]> {
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(scopeWhere(companies.id, scope))
+    .orderBy(companies.createdAt, companies.name);
   return rows.map(toCompanyDTO);
 }
 
-export async function listCompanySummaries(db: Database): Promise<CompanySummaryDTO[]> {
-  const rows = await db.select().from(companies).orderBy(companies.createdAt, companies.name);
+export async function listCompanySummaries(
+  db: Database,
+  scope: AccessScope = FULL_SCOPE,
+): Promise<CompanySummaryDTO[]> {
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(scopeWhere(companies.id, scope))
+    .orderBy(companies.createdAt, companies.name);
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const now = new Date();
@@ -284,6 +309,7 @@ export async function createCompany(
           .returning();
         const agent = inserted[0];
         if (!agent) throw new Error("Agent insert failed");
+        await applyTemplateGrants(tx, agent.id, key, origin);
         if (key === "company_manager") managerId = agent.id;
         await tx
           .insert(agentCompanyAssignments)
@@ -295,8 +321,10 @@ export async function createCompany(
     await recordAuditEvent(
       tx,
       {
+        ...actorAuditFields(actor),
         companyId: company.id,
-        actorUser: actor.kind === "human" ? actor.ref : undefined,
+        resourceType: "company",
+        resourceId: company.id,
         action: "company.created",
         description: `Company "${company.name}" created with ${created.length} initial agent(s)`,
         metadata: { slug, initialAgents: data.initialAgents, actor: actor.ref },
@@ -306,9 +334,6 @@ export async function createCompany(
           dailyAiBudget: data.dailyAiBudget,
           monthlyAiBudget: data.monthlyAiBudget,
         },
-        ipAddress: actor.ipAddress,
-        userAgent: actor.userAgent,
-        requestId: actor.requestId,
       },
       origin,
     );

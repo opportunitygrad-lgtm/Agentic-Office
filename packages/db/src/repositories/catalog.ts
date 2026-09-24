@@ -1,14 +1,15 @@
-import { eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { AGENT_TEMPLATES } from "@aibos/agent-core";
 import { INTEGRATION_CATALOG } from "@aibos/integration-core";
 import type { AgentTemplateDTO, DepartmentDTO, IntegrationDTO } from "@aibos/shared";
 import type { Database } from "../client";
 import { agentTemplates, agents, companies, departments, integrations } from "../schema";
-import { iso } from "./util";
+import { FULL_SCOPE, iso, scopeWhere, type AccessScope } from "./util";
 
 export async function listDepartments(
   db: Database,
   companyId?: string | null,
+  scope: AccessScope = FULL_SCOPE,
 ): Promise<DepartmentDTO[]> {
   const rows = await db
     .select({
@@ -17,9 +18,13 @@ export async function listDepartments(
     })
     .from(departments)
     .where(
-      companyId
-        ? or(isNull(departments.companyId), eq(departments.companyId, companyId))
-        : undefined,
+      and(
+        companyId
+          ? or(isNull(departments.companyId), eq(departments.companyId, companyId))
+          : undefined,
+        // Global departments are shared reference data; company departments follow isolation.
+        scopeWhere(departments.companyId, { ...scope, includeGroup: true }),
+      ),
     )
     .orderBy(departments.name);
   return rows.map(({ d, agentCount }) => ({
@@ -58,6 +63,7 @@ export async function listAgentTemplates(db: Database): Promise<AgentTemplateDTO
 export async function listIntegrations(
   db: Database,
   companyId?: string | null,
+  scope: AccessScope = FULL_SCOPE,
 ): Promise<IntegrationDTO[]> {
   const rows = await db
     .select({
@@ -72,9 +78,13 @@ export async function listIntegrations(
     .from(integrations)
     .leftJoin(companies, eq(companies.id, integrations.companyId))
     .where(
-      companyId
-        ? or(isNull(integrations.companyId), eq(integrations.companyId, companyId))
-        : undefined,
+      and(
+        companyId
+          ? or(isNull(integrations.companyId), eq(integrations.companyId, companyId))
+          : undefined,
+        // Platform-wide integrations are visible to anyone with integration access.
+        scopeWhere(integrations.companyId, { ...scope, includeGroup: true }),
+      ),
     )
     .orderBy(integrations.kind);
   const catalog = new Map(INTEGRATION_CATALOG.map((d) => [d.kind, d]));

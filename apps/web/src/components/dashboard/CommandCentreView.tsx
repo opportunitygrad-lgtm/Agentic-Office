@@ -4,6 +4,7 @@ import type { DashboardSummaryDTO, LiveSessionDTO } from "@aibos/shared";
 import { EmptyState, MockBadge, Panel } from "@aibos/ui";
 import { withCompany } from "@/lib/format";
 import { PageHeader } from "../common/PageHeader";
+import { IfCan } from "../shell/IfCan";
 import { LiveSessionSwitcher } from "../live/LiveSessionSwitcher";
 import { ActivityStream } from "./ActivityStream";
 import { AgentCard } from "./AgentCard";
@@ -68,12 +69,14 @@ export function CommandCentreView({
             >
               View tasks
             </Link>
-            <Link
-              href="/companies/new"
-              className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-sm font-medium text-white shadow-sm hover:bg-accent-strong"
-            >
-              <Plus className="size-4" aria-hidden="true" /> Add company
-            </Link>
+            <IfCan permission="company.create">
+              <Link
+                href="/companies/new"
+                className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-sm font-medium text-white shadow-sm hover:bg-accent-strong"
+              >
+                <Plus className="size-4" aria-hidden="true" /> Add company
+              </Link>
+            </IfCan>
           </>
         }
       />

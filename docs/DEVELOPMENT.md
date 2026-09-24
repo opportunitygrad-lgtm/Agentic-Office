@@ -16,24 +16,52 @@ pnpm db:seed                  # reference data + development seed
 pnpm dev                      # web :3000, api :4000, worker
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000 and sign in with a development account.
+
+## Signing in (development)
+
+`pnpm db:seed` creates **DEVELOPMENT SEED accounts** — never use them in
+production (the seed refuses to run when `NODE_ENV=production`). All share the
+password `aibos-dev-only-password`:
+
+| Email                        | Access                                                          |
+| ---------------------------- | --------------------------------------------------------------- |
+| `owner@aibos.example`        | Platform Owner — all companies                                  |
+| `group.admin@aibos.example`  | Group Admin — Euro Pilot Training + Opportunitygrad             |
+| `ept.manager@aibos.example`  | Company Manager — Euro Pilot Training only                      |
+| `pa.manager@aibos.example`   | Company Manager — PilotsAssist only                             |
+| `og.marketing@aibos.example` | Department Manager — Opportunitygrad, Marketing department only |
+| `disabled@aibos.example`     | Disabled account (sign-in is refused)                           |
+
+Password reset emails are not sent yet (Stage 14): in development the API logs
+the reset link (`DEVELOPMENT ONLY — password reset link`). Invitation links are
+shown once to the inviter in Settings → Users & Access.
+
+## First administrator (empty database)
+
+```bash
+BOOTSTRAP_ADMIN_EMAIL=you@company.com pnpm auth:bootstrap
+```
+
+Prompts for the password; refuses if any user exists. See docs/SECURITY.md.
 
 ## Commands
 
-| Command                                       | What it does                                                              |
-| --------------------------------------------- | ------------------------------------------------------------------------- |
-| `pnpm infra:up` / `infra:down` / `infra:logs` | Start/stop/tail Docker services                                           |
-| `pnpm db:migrate`                             | Apply Drizzle migrations to `DATABASE_URL`                                |
-| `pnpm db:generate`                            | Generate a migration after editing `packages/db/src/schema.ts`            |
-| `pnpm db:seed`                                | Sync reference data and (re)load development seed rows                    |
-| `pnpm db:reset`                               | Drop schema, migrate and seed (development only)                          |
-| `pnpm dev`                                    | Run web, API and worker together (or `dev:web`, `dev:api`, `dev:worker`)  |
-| `pnpm test`                                   | All Vitest suites (unit, DB, API, frontend). DB/API tests need `infra:up` |
-| `pnpm test:e2e`                               | Playwright responsive/navigation smoke (needs `pnpm dev` running)         |
-| `pnpm typecheck`                              | `tsc --noEmit` in every workspace                                         |
-| `pnpm lint`                                   | ESLint (zero warnings allowed)                                            |
-| `pnpm format` / `format:check`                | Prettier                                                                  |
-| `pnpm check`                                  | lint + typecheck + test                                                   |
+| Command                                       | What it does                                                                |
+| --------------------------------------------- | --------------------------------------------------------------------------- |
+| `pnpm infra:up` / `infra:down` / `infra:logs` | Start/stop/tail Docker services                                             |
+| `pnpm db:migrate`                             | Apply Drizzle migrations to `DATABASE_URL`                                  |
+| `pnpm db:generate`                            | Generate a migration after editing `packages/db/src/schema.ts`              |
+| `pnpm db:seed`                                | Sync reference data and (re)load development seed rows                      |
+| `pnpm db:reset`                               | Drop schema, migrate and seed (development only)                            |
+| `pnpm auth:bootstrap`                         | Create the first Platform Owner on an empty database (prompts for password) |
+| `pnpm dev`                                    | Run web, API and worker together (or `dev:web`, `dev:api`, `dev:worker`)    |
+| `pnpm test`                                   | All Vitest suites (unit, DB, API, frontend). DB/API tests need `infra:up`   |
+| `pnpm test:e2e`                               | Playwright responsive/navigation smoke (needs `pnpm dev` running)           |
+| `pnpm typecheck`                              | `tsc --noEmit` in every workspace                                           |
+| `pnpm lint`                                   | ESLint (zero warnings allowed)                                              |
+| `pnpm format` / `format:check`                | Prettier                                                                    |
+| `pnpm check`                                  | lint + typecheck + test                                                     |
 
 Targeted runs: `pnpm --filter @aibos/api test`, `pnpm --filter @aibos/web test`.
 

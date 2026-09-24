@@ -20,6 +20,10 @@ import {
   departments,
   integrations,
   tasks,
+  companyMemberships,
+  membershipDepartments,
+  roles,
+  users,
 } from "../../schema";
 import {
   SEED_AGENTS,
@@ -29,9 +33,15 @@ import {
   SEED_EVENTS,
   SEED_TASKS,
   SEED_USAGE_PROFILE,
+  SEED_USERS,
+  DEV_SEED_PASSWORD,
 } from "./data";
+import { requiredApprovalPermissions } from "@aibos/access-core";
+import { hashPassword } from "../../auth/crypto";
+import { applyTemplateGrants } from "../../repositories/agent-authority";
+import { serviceActor } from "../../repositories/util";
 
-const SEED_ACTOR = { kind: "system" as const, ref: "dev-seed" };
+const SEED_ACTOR = serviceActor("dev-seed");
 const ORIGIN = "dev_seed" as const;
 
 /** Deterministic PRNG so seeded charts look the same on every run. */
@@ -51,6 +61,7 @@ export async function clearDevSeed(db: Database): Promise<void> {
   await db.delete(approvals).where(eq(approvals.origin, ORIGIN));
   await db.delete(tasks).where(eq(tasks.origin, ORIGIN));
   await db.delete(agents).where(eq(agents.origin, ORIGIN));
+  await db.delete(users).where(eq(users.origin, ORIGIN));
   await db
     .delete(budgetPolicies)
     .where(and(eq(budgetPolicies.origin, ORIGIN), isNull(budgetPolicies.companyId)));
@@ -125,7 +136,54 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
       );
     }
   }
+  for (const a of SEED_AGENTS)
+    await applyTemplateGrants(db, agentIds.get(a.key)!, a.template, ORIGIN);
   const aid = (key?: string | null) => (key ? agentIds.get(key)! : null);
+
+  /* development users (DEVELOPMENT SEED ACCOUNTS — see data.ts) */
+  const passwordHash = await hashPassword(DEV_SEED_PASSWORD);
+  const roleRows = await db.select().from(roles);
+  const roleId = (key: string) => roleRows.find((r) => r.key === key)!.id;
+  const userIds = new Map<string, string>();
+  for (const u of SEED_USERS) {
+    const [user] = await db
+      .insert(users)
+      .values({
+        email: u.email,
+        emailNormalized: u.email.toLowerCase(),
+        firstName: u.firstName,
+        lastName: u.lastName,
+        passwordHash,
+        passwordChangedAt: now,
+        status: u.status ?? "active",
+        disabledAt: u.status === "disabled" ? now : null,
+        origin: ORIGIN,
+      })
+      .returning({ id: users.id });
+    userIds.set(u.email, user!.id);
+    for (const m of u.memberships) {
+      const [membership] = await db
+        .insert(companyMemberships)
+        .values({
+          userId: user!.id,
+          companyId: cid(m.company),
+          roleId: roleId(m.role),
+          status: "active",
+          joinedAt: now,
+          origin: ORIGIN,
+        })
+        .returning({ id: companyMemberships.id });
+      if (m.departments?.length) {
+        await db.insert(membershipDepartments).values(
+          m.departments.map((slug) => ({
+            membershipId: membership!.id,
+            departmentId: deptId.get(slug)!,
+          })),
+        );
+      }
+    }
+  }
+  const ownerId = userIds.get("owner@aibos.example")!;
 
   /* tasks (parents first — SEED_TASKS is ordered) */
   const taskIds = new Map<string, string>();
@@ -185,7 +243,13 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
       status: a.status ?? "pending",
       requestedAt: ago(a.minutesAgo),
       expiresAt: new Date(now.getTime() + 48 * 3_600_000),
-      decidedBy: a.status && a.status !== "pending" ? "dev-user" : null,
+      requiredPermissions: requiredApprovalPermissions({
+        type: a.type,
+        riskLevel: a.riskLevel,
+        companyId: cid(a.company),
+      }),
+      decidedBy: a.status && a.status !== "pending" ? "owner@aibos.example" : null,
+      decidedByUserId: a.status && a.status !== "pending" ? ownerId : null,
       decidedAt: a.status && a.status !== "pending" ? ago(a.minutesAgo - 30) : null,
       decisionNotes: a.status === "approved" ? "Approved in weekly review (seed)" : null,
       origin: ORIGIN,
@@ -199,7 +263,14 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
       companyId: cid(e.company),
       agentId: aid(e.agent),
       taskId: tid(e.task),
-      actorUser: e.action === "approval.granted" ? "dev-user" : null,
+      actorType:
+        e.action === "approval.granted"
+          ? ("human" as const)
+          : e.agent
+            ? ("agent" as const)
+            : ("system" as const),
+      actorUser: e.action === "approval.granted" ? "owner@aibos.example" : null,
+      actorUserId: e.action === "approval.granted" ? ownerId : null,
       action: e.action,
       tool: e.tool,
       provider: e.provider,
@@ -323,9 +394,11 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
     approvals: number;
     events: number;
     usage: number;
+    users: number;
   }>(sql`
-    select (select count(*)::int from ${agents}) as agents, (select count(*)::int from ${tasks}) as tasks,
+    select (select count(*)::int from ${users}) as users, (select count(*)::int from ${agents}) as agents, (select count(*)::int from ${tasks}) as tasks,
            (select count(*)::int from ${approvals}) as approvals, (select count(*)::int from ${auditEvents}) as events,
            (select count(*)::int from ${aiUsageRecords}) as usage`);
   return { companies: companyIds.size, ...(counts ?? {}) };
 }
+export { DEV_SEED_PASSWORD, SEED_USERS } from "./data";

@@ -25,6 +25,8 @@ export interface NavItem {
   /** Build ledger stage for placeholder modules. */
   stage?: number;
   badge?: "approvals";
+  /** UI visibility hint — the API enforces access regardless. */
+  permission?: string;
   children?: NavItem[];
 }
 
@@ -44,15 +46,17 @@ export const NAV: NavGroup[] = [
         label: "Companies",
         href: "/companies",
         icon: Building2,
+        permission: "company.view",
         children: [
           { label: "All Companies", href: "/companies" },
-          { label: "Add Company", href: "/companies/new" },
+          { label: "Add Company", href: "/companies/new", permission: "company.create" },
         ],
       },
       {
         label: "AI Workforce",
         href: "/workforce/agents",
         icon: Bot,
+        permission: "agent.view",
         children: [
           { label: "Agents", href: "/workforce/agents" },
           { label: "Agent Templates", href: "/workforce/templates" },
@@ -63,6 +67,7 @@ export const NAV: NavGroup[] = [
         label: "Tasks",
         href: "/tasks/active",
         icon: ListChecks,
+        permission: "task.view",
         children: [
           { label: "Active", href: "/tasks/active" },
           { label: "Queue", href: "/tasks/queue" },
@@ -70,28 +75,66 @@ export const NAV: NavGroup[] = [
           { label: "Failed", href: "/tasks/failed" },
         ],
       },
-      { label: "Live Sessions", href: "/live", icon: MonitorPlay },
-      { label: "Approvals", href: "/approvals", icon: BadgeCheck, badge: "approvals" },
+      { label: "Live Sessions", href: "/live", icon: MonitorPlay, permission: "agent.view" },
+      {
+        label: "Approvals",
+        href: "/approvals",
+        icon: BadgeCheck,
+        badge: "approvals",
+        permission: "approval.view",
+      },
     ],
   },
   {
     label: "Operations",
     items: [
       { label: "Leads", href: "/leads", icon: Target, stage: 13 },
-      { label: "Email", href: "/email", icon: Mail, stage: 14 },
-      { label: "Marketing", href: "/marketing", icon: Megaphone, stage: 20 },
-      { label: "Advertising Intelligence", href: "/advertising", icon: Telescope, stage: 21 },
-      { label: "Websites", href: "/websites", icon: Globe, stage: 24 },
+      { label: "Email", href: "/email", icon: Mail, stage: 14, permission: "email.view" },
+      {
+        label: "Marketing",
+        href: "/marketing",
+        icon: Megaphone,
+        stage: 20,
+        permission: "marketing.view",
+      },
+      {
+        label: "Advertising Intelligence",
+        href: "/advertising",
+        icon: Telescope,
+        stage: 21,
+        permission: "meta.view",
+      },
+      { label: "Websites", href: "/websites", icon: Globe, stage: 24, permission: "website.view" },
       { label: "Research", href: "/research", icon: FileSearch, stage: 36 },
     ],
   },
   {
     label: "System",
     items: [
-      { label: "Integrations", href: "/integrations", icon: Blocks },
-      { label: "Analytics", href: "/analytics", icon: BarChart3, stage: 25 },
-      { label: "Audit Log", href: "/audit", icon: ScrollText },
-      { label: "Settings", href: "/settings", icon: Settings },
+      {
+        label: "Integrations",
+        href: "/integrations",
+        icon: Blocks,
+        permission: "integration.view",
+      },
+      {
+        label: "Analytics",
+        href: "/analytics",
+        icon: BarChart3,
+        stage: 25,
+        permission: "cost.view",
+      },
+      { label: "Audit Log", href: "/audit", icon: ScrollText, permission: "audit.view" },
+      {
+        label: "Settings",
+        href: "/settings",
+        icon: Settings,
+        children: [
+          { label: "General", href: "/settings" },
+          { label: "Users & Access", href: "/settings/users", permission: "user.view" },
+          { label: "Roles & Permissions", href: "/settings/roles", permission: "user.view" },
+        ],
+      },
     ],
   },
 ];

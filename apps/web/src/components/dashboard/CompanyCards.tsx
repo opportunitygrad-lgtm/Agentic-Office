@@ -4,6 +4,7 @@ import type { CompanySummaryDTO } from "@aibos/shared";
 import { formatUsd } from "@aibos/shared";
 import { Monogram, cn } from "@aibos/ui";
 import { pct } from "@/lib/format";
+import { IfCan } from "../shell/IfCan";
 
 function Stat({ label, value, sub }: { label: string; value: number | string; sub?: string }) {
   return (
@@ -95,20 +96,22 @@ export function CompanyCards({
             </li>
           );
         })}
-        <li>
-          <Link
-            href="/companies/new"
-            className="focus-ring group flex h-full min-h-[172px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line-strong bg-transparent p-4 text-center transition-colors hover:border-accent hover:bg-accent-soft/40"
-          >
-            <span className="grid size-10 place-items-center rounded-xl bg-surface text-accent shadow-panel ring-1 ring-line transition-transform group-hover:scale-105">
-              <Plus className="size-5" aria-hidden="true" />
-            </span>
-            <span className="text-[14px] font-semibold">Add company</span>
-            <span className="max-w-[200px] text-[12px] text-fg-muted">
-              Onboard a new business — identity, brand, budgets and agents.
-            </span>
-          </Link>
-        </li>
+        <IfCan permission="company.create">
+          <li>
+            <Link
+              href="/companies/new"
+              className="focus-ring group flex h-full min-h-[172px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line-strong bg-transparent p-4 text-center transition-colors hover:border-accent hover:bg-accent-soft/40"
+            >
+              <span className="grid size-10 place-items-center rounded-xl bg-surface text-accent shadow-panel ring-1 ring-line transition-transform group-hover:scale-105">
+                <Plus className="size-5" aria-hidden="true" />
+              </span>
+              <span className="text-[14px] font-semibold">Add company</span>
+              <span className="max-w-[200px] text-[12px] text-fg-muted">
+                Onboard a new business — identity, brand, budgets and agents.
+              </span>
+            </Link>
+          </li>
+        </IfCan>
       </ul>
     </section>
   );

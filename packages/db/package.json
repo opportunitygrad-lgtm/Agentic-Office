@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
     "./testing": "./test/helpers.ts",
-    "./dev-seed": "./src/seed/dev/seed-dev.ts"
+    "./dev-seed": "./src/seed/dev/seed-dev.ts",
+    "./auth": "./src/auth/crypto.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
@@ -15,14 +16,18 @@
     "db:seed": "tsx src/seed/run.ts",
     "db:reset": "tsx src/reset.ts && tsx src/migrate.ts && tsx src/seed/run.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "auth:bootstrap": "tsx src/auth/bootstrap.ts"
   },
   "dependencies": {
+    "@aibos/access-core": "workspace:*",
     "@aibos/agent-core": "workspace:*",
     "@aibos/integration-core": "workspace:*",
     "@aibos/shared": "workspace:*",
+    "@node-rs/argon2": "^2.2.1",
     "drizzle-orm": "^0.45.3",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.11",

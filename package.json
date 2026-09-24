@@ -27,7 +27,8 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "auth:bootstrap": "pnpm --filter @aibos/db auth:bootstrap"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

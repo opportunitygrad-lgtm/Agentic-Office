@@ -7,6 +7,7 @@ import {
   AUDIT_OUTCOMES,
   AUTONOMY_LEVELS,
   ACTOR_KINDS,
+  ACTOR_TYPES,
   PROVIDER_TYPES,
   RISK_LEVELS,
   TASK_PRIORITIES,
@@ -187,7 +188,7 @@ export const createAgentSchema = z.object({
   primaryProvider: z.enum(PROVIDER_TYPES).default("CLAUDE"),
   fallbackProvider: z.enum(PROVIDER_TYPES).optional(),
   preferredModel: trimmed(120).optional(),
-  autonomyLevel: z.enum(AUTONOMY_LEVELS).default("suggest"),
+  autonomyLevel: z.enum(AUTONOMY_LEVELS).default("observe"),
   isTemporary: z.boolean().default(false),
   perTaskBudget: dailyBudgetSchema.default(2),
   dailyBudget: dailyBudgetSchema.default(10),
@@ -232,6 +233,11 @@ export const createApprovalSchema = z.object({
 export type CreateApprovalInput = z.input<typeof createApprovalSchema>;
 
 export const createAuditEventSchema = z.object({
+  actorType: z.enum(ACTOR_TYPES).default("system"),
+  actorUserId: uuidSchema.optional(),
+  actorServiceId: trimmed(80).optional(),
+  resourceType: trimmed(80).optional(),
+  resourceId: trimmed(200).optional(),
   companyId: uuidSchema.optional(),
   agentId: uuidSchema.optional(),
   taskId: uuidSchema.optional(),

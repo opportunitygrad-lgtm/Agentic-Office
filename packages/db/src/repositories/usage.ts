@@ -2,7 +2,14 @@ import { and, eq, gte, sql, type SQL } from "drizzle-orm";
 import { PROVIDER_TYPES, type ProviderType, type UsageSummaryDTO } from "@aibos/shared";
 import type { Database } from "../client";
 import { aiUsageRecords, companies } from "../schema";
-import { startOfUtcDay, startOfUtcMonth, ts } from "./util";
+import {
+  FULL_SCOPE,
+  scopeWhere,
+  startOfUtcDay,
+  startOfUtcMonth,
+  ts,
+  type AccessScope,
+} from "./util";
 
 const TREND_DAYS = 14;
 
@@ -13,6 +20,7 @@ const TREND_DAYS = 14;
 export async function usageSummary(
   db: Database,
   companyId?: string | null,
+  accessScope: AccessScope = FULL_SCOPE,
 ): Promise<UsageSummaryDTO> {
   const now = new Date();
   const today = startOfUtcDay(now);
@@ -22,6 +30,8 @@ export async function usageSummary(
 
   const scope: SQL[] = [gte(aiUsageRecords.occurredAt, since)];
   if (companyId) scope.push(eq(aiUsageRecords.companyId, companyId));
+  const visible = scopeWhere(aiUsageRecords.companyId, accessScope);
+  if (visible) scope.push(visible);
 
   const [rows, daily, originRows, budgets] = await Promise.all([
     db
@@ -48,14 +58,19 @@ export async function usageSummary(
     db
       .select({ live: sql<number>`count(*) filter (where ${aiUsageRecords.origin} = 'live')::int` })
       .from(aiUsageRecords)
-      .where(companyId ? eq(aiUsageRecords.companyId, companyId) : undefined),
+      .where(and(companyId ? eq(aiUsageRecords.companyId, companyId) : undefined, visible)),
     db
       .select({
         daily: sql<number>`coalesce(sum(${companies.dailyAiBudget}), 0)::float8`,
         monthly: sql<number>`coalesce(sum(${companies.monthlyAiBudget}), 0)::float8`,
       })
       .from(companies)
-      .where(companyId ? eq(companies.id, companyId) : eq(companies.status, "active")),
+      .where(
+        and(
+          companyId ? eq(companies.id, companyId) : eq(companies.status, "active"),
+          scopeWhere(companies.id, accessScope),
+        ),
+      ),
   ]);
 
   const days: string[] = [];

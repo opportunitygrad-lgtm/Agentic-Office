@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { navState, routerMock } from "@/test/next-navigation";
-import { ept, og, pa } from "@/test/fixtures";
+import { ME_EPT_MANAGER, ept, og, pa } from "@/test/fixtures";
 import { CompanySwitcher } from "./CompanySwitcher";
 
 describe("CompanySwitcher", () => {
@@ -38,5 +38,17 @@ describe("CompanySwitcher", () => {
     );
     await user.keyboard("{Home}{Enter}");
     expect(routerMock.push).toHaveBeenCalledWith("/workforce/agents");
+  });
+
+  it("only offers the companies the signed-in user may access", async () => {
+    const user = userEvent.setup();
+    render(<CompanySwitcher companies={ME_EPT_MANAGER.accessibleCompanies} />);
+    await user.click(screen.getByRole("button", { name: /Company scope/ }));
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(options[1]).toHaveTextContent("Euro Pilot Training");
+    expect(
+      screen.queryByRole("option", { name: /PilotsAssist|Opportunitygrad/ }),
+    ).not.toBeInTheDocument();
   });
 });

@@ -15,6 +15,15 @@ const schema = z.object({
         .map((s) => s.trim())
         .filter(Boolean),
     ),
+  /** Public URL of the web app — used to build invitation / reset links. */
+  WEB_ORIGIN: z.string().url().default("http://localhost:3000"),
+  /** Secure cookies (default: on in production). */
+  COOKIE_SECURE: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  /** Proxies whose X-Forwarded-For is trusted (the web app's rewrite runs on loopback). */
+  TRUST_PROXY: z.string().default("127.0.0.1,::1"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
 });

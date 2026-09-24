@@ -14,4 +14,4 @@ if (typeof HTMLDialogElement !== "undefined") {
     this.dispatchEvent(new Event("close"));
   };
 }
-Element.prototype.scrollIntoView ??= function () {};
+if (typeof Element !== "undefined") Element.prototype.scrollIntoView ??= function () {};

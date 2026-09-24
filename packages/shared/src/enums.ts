@@ -47,24 +47,24 @@ export const AGENT_SCOPES = ["global", "company"] as const;
 export type AgentScope = (typeof AGENT_SCOPES)[number];
 
 /**
- * Autonomy ladder. Higher levels will be unlocked per agent + per action type
- * once the approval engine and RBAC exist (Stages 02, 05, 33).
+ * Formal agent autonomy ladder (Stage 02). Even the highest level remains
+ * subject to permissions, cost policies, company rules and audit.
  */
 export const AUTONOMY_LEVELS = [
+  "disabled",
   "observe",
-  "suggest",
-  "act_with_approval",
-  "autonomous_limited",
-  "autonomous",
+  "limited_operator",
+  "approval_gated",
+  "trusted_automation",
 ] as const;
 export type AutonomyLevel = (typeof AUTONOMY_LEVELS)[number];
 
 export const AUTONOMY_LABELS: Record<AutonomyLevel, string> = {
-  observe: "Observe only",
-  suggest: "Suggest",
-  act_with_approval: "Act with approval",
-  autonomous_limited: "Autonomous (limited)",
-  autonomous: "Autonomous",
+  disabled: "L0 · Disabled",
+  observe: "L1 · Observe",
+  limited_operator: "L2 · Limited operator",
+  approval_gated: "L3 · Approval-gated",
+  trusted_automation: "L4 · Trusted automation",
 };
 
 export const TASK_STATUSES = [
@@ -252,3 +252,27 @@ export const QUEUE_NAMES = {
 /** Redis key the worker refreshes so the API can report worker health. */
 export const WORKER_HEARTBEAT_KEY = "aibos:worker:heartbeat";
 export const WORKER_HEARTBEAT_TTL_SECONDS = 45;
+
+/* ---------- humans, sessions, principals (Stage 02) ---------- */
+
+export const USER_STATUSES = ["invited", "active", "suspended", "disabled"] as const;
+export type UserStatus = (typeof USER_STATUSES)[number];
+
+export const MEMBERSHIP_STATUSES = ["invited", "active", "suspended", "revoked"] as const;
+export type MembershipStatus = (typeof MEMBERSHIP_STATUSES)[number];
+
+export const ROLE_SCOPES = ["global", "company"] as const;
+export type RoleScope = (typeof ROLE_SCOPES)[number];
+
+/** Who performed an audited action. Humans, agents and services are distinct principals. */
+export const ACTOR_TYPES = ["human", "agent", "service", "system", "anonymous"] as const;
+export type ActorType = (typeof ACTOR_TYPES)[number];
+
+export const AUTH_TOKEN_TYPES = ["password_reset", "invitation"] as const;
+export type AuthTokenType = (typeof AUTH_TOKEN_TYPES)[number];
+
+export const GRANT_EFFECT_VALUES = ["allow", "require_approval", "deny"] as const;
+export type GrantEffectValue = (typeof GRANT_EFFECT_VALUES)[number];
+
+/** Session cookie name shared by API and web. */
+export const SESSION_COOKIE = "aibos_session";

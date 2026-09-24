@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   createAuditEventSchema,
   type AuditEventDTO,
@@ -6,6 +6,7 @@ import {
 } from "@aibos/shared";
 import type { Database } from "../client";
 import { agents, auditEvents, companies, type AuditEvent } from "../schema";
+import { FULL_SCOPE, scopeWhere, type AccessScope } from "./util";
 
 type Tx = Pick<Database, "insert" | "select">;
 
@@ -25,7 +26,7 @@ export async function recordAuditEvent(
 
 export async function listAuditEvents(
   db: Database,
-  opts: { companyId?: string | null; limit?: number } = {},
+  opts: { companyId?: string | null; limit?: number; scope?: AccessScope } = {},
 ): Promise<AuditEventDTO[]> {
   const rows = await db
     .select({
@@ -41,7 +42,12 @@ export async function listAuditEvents(
     .from(auditEvents)
     .leftJoin(companies, eq(companies.id, auditEvents.companyId))
     .leftJoin(agents, eq(agents.id, auditEvents.agentId))
-    .where(opts.companyId ? eq(auditEvents.companyId, opts.companyId) : undefined)
+    .where(
+      and(
+        opts.companyId ? eq(auditEvents.companyId, opts.companyId) : undefined,
+        scopeWhere(auditEvents.companyId, opts.scope ?? FULL_SCOPE),
+      ),
+    )
     .orderBy(desc(auditEvents.occurredAt))
     .limit(opts.limit ?? 100);
 
@@ -51,7 +57,12 @@ export async function listAuditEvents(
     company: company?.id ? company : null,
     agent: e.agentId && agentName ? { id: e.agentId, name: agentName } : null,
     taskId: e.taskId,
+    actorType: e.actorType,
     actorUser: e.actorUser,
+    actorUserId: e.actorUserId,
+    actorServiceId: e.actorServiceId,
+    resourceType: e.resourceType,
+    resourceId: e.resourceId,
     action: e.action,
     tool: e.tool,
     provider: e.provider,

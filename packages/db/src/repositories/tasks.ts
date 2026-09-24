@@ -10,7 +10,15 @@ import type { Database } from "../client";
 import { NotFoundError } from "../errors";
 import { agents, companies, tasks, type Task } from "../schema";
 import { recordAuditEvent } from "./audit";
-import { iso, type Actor } from "./util";
+import {
+  FULL_SCOPE,
+  actorAuditFields,
+  departmentVisible,
+  iso,
+  scopeWhere,
+  type AccessScope,
+  type Actor,
+} from "./util";
 
 export interface TaskFilters {
   companyId?: string | null;
@@ -18,6 +26,7 @@ export interface TaskFilters {
   agentId?: string;
   rootTaskId?: string;
   limit?: number;
+  scope?: AccessScope;
 }
 
 const STATUS_ORDER = sql`case ${tasks.status}
@@ -30,6 +39,9 @@ export async function listTasks(db: Database, filters: TaskFilters = {}): Promis
   if (filters.statuses?.length) where.push(inArray(tasks.status, filters.statuses));
   if (filters.agentId) where.push(eq(tasks.assignedAgentId, filters.agentId));
   if (filters.rootTaskId) where.push(eq(tasks.rootTaskId, filters.rootTaskId));
+  const scope = filters.scope ?? FULL_SCOPE;
+  const scoped = scopeWhere(tasks.companyId, scope);
+  if (scoped) where.push(scoped);
 
   const childCount = sql<number>`(select count(*)::int from ${tasks} as c where c.parent_task_id = ${tasks.id})`;
   const rows = await db
@@ -42,6 +54,7 @@ export async function listTasks(db: Database, filters: TaskFilters = {}): Promis
         accentColor: companies.accentColor,
       },
       agentName: agents.name,
+      agentDepartmentId: agents.departmentId,
       childCount,
     })
     .from(tasks)
@@ -51,37 +64,39 @@ export async function listTasks(db: Database, filters: TaskFilters = {}): Promis
     .orderBy(STATUS_ORDER, tasks.depth, desc(tasks.updatedAt))
     .limit(filters.limit ?? 100);
 
-  return rows.map(({ t, company, agentName, childCount: children }) => ({
-    id: t.id,
-    company: company?.id ? company : null,
-    title: t.title,
-    description: t.description,
-    type: t.type,
-    priority: t.priority,
-    status: t.status,
-    assignedAgent:
-      t.assignedAgentId && agentName ? { id: t.assignedAgentId, name: agentName } : null,
-    createdByKind: t.createdByKind,
-    createdByRef: t.createdByRef,
-    parentTaskId: t.parentTaskId,
-    rootTaskId: t.rootTaskId,
-    childCount: children,
-    requiredProvider: t.requiredProvider,
-    estimatedCost: t.estimatedCost,
-    actualCost: t.actualCost,
-    progress: t.progress,
-    currentAction: t.currentAction,
-    currentTool: t.currentTool,
-    requiresApproval: t.requiresApproval,
-    dueAt: iso(t.dueAt),
-    startedAt: iso(t.startedAt),
-    completedAt: iso(t.completedAt),
-    error: t.error,
-    resultSummary: t.resultSummary,
-    origin: t.origin,
-    createdAt: t.createdAt.toISOString(),
-    updatedAt: t.updatedAt.toISOString(),
-  }));
+  return rows
+    .filter((r) => departmentVisible(scope, r.t.companyId, r.agentDepartmentId))
+    .map(({ t, company, agentName, childCount: children }) => ({
+      id: t.id,
+      company: company?.id ? company : null,
+      title: t.title,
+      description: t.description,
+      type: t.type,
+      priority: t.priority,
+      status: t.status,
+      assignedAgent:
+        t.assignedAgentId && agentName ? { id: t.assignedAgentId, name: agentName } : null,
+      createdByKind: t.createdByKind,
+      createdByRef: t.createdByRef,
+      parentTaskId: t.parentTaskId,
+      rootTaskId: t.rootTaskId,
+      childCount: children,
+      requiredProvider: t.requiredProvider,
+      estimatedCost: t.estimatedCost,
+      actualCost: t.actualCost,
+      progress: t.progress,
+      currentAction: t.currentAction,
+      currentTool: t.currentTool,
+      requiresApproval: t.requiresApproval,
+      dueAt: iso(t.dueAt),
+      startedAt: iso(t.startedAt),
+      completedAt: iso(t.completedAt),
+      error: t.error,
+      resultSummary: t.resultSummary,
+      origin: t.origin,
+      createdAt: t.createdAt.toISOString(),
+      updatedAt: t.updatedAt.toISOString(),
+    }));
 }
 
 /**
@@ -146,7 +161,9 @@ export async function createTask(
         companyId: companyId ?? undefined,
         taskId: task.id,
         agentId: task.assignedAgentId ?? undefined,
-        actorUser: actor.kind === "human" ? actor.ref : undefined,
+        ...actorAuditFields(actor),
+        resourceType: "task",
+        resourceId: task.id,
         action: data.parentTaskId ? "task.subtask_created" : "task.created",
         description: `Task "${task.title}" created`,
         metadata: { parentTaskId: data.parentTaskId ?? null, rootTaskId, depth, actor: actor.ref },
@@ -158,7 +175,11 @@ export async function createTask(
 }
 
 /** Returns an entire task tree (root + all descendants), ordered by depth. */
-export async function getTaskTree(db: Database, rootTaskId: string): Promise<TaskDTO[]> {
-  const list = await listTasks(db, { rootTaskId, limit: 500 });
+export async function getTaskTree(
+  db: Database,
+  rootTaskId: string,
+  scope?: AccessScope,
+): Promise<TaskDTO[]> {
+  const list = await listTasks(db, { rootTaskId, limit: 500, scope });
   return list.sort((a, b) => (a.parentTaskId ? 1 : 0) - (b.parentTaskId ? 1 : 0));
 }

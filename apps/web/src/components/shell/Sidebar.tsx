@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { FlaskConical, PlugZap } from "lucide-react";
 import { cn } from "@aibos/ui";
 import { NAV, isActive, type NavItem } from "@/lib/nav";
+import { hasPermission, useMe } from "./SessionContext";
 import { withCompany } from "@/lib/format";
 import { BrandMark } from "./Brand";
 
@@ -19,6 +20,8 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const company = useSearchParams().get("company");
+  const me = useMe();
+  const visible = (item: NavItem) => !item.permission || hasPermission(me, item.permission);
   const href = (h: string) => (h.startsWith("/companies") ? h : withCompany(h, company));
 
   function Item({ item }: { item: NavItem }) {
@@ -70,7 +73,7 @@ export function Sidebar({
         </Link>
         {item.children && active && (
           <ul className="ml-[18px] mt-0.5 space-y-0.5 border-l border-line pl-3">
-            {item.children.map((c) => {
+            {item.children.filter(visible).map((c) => {
               const childActive = pathname === c.href;
               return (
                 <li key={c.href}>
@@ -104,11 +107,11 @@ export function Sidebar({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-2">
-        {NAV.map((group, gi) => (
+        {NAV.filter((group) => group.items.some(visible)).map((group, gi) => (
           <div key={gi} className={cn(gi > 0 && "mt-5")}>
             {group.label && <p className="eyebrow mb-1.5 px-2.5">{group.label}</p>}
             <ul className="space-y-0.5">
-              {group.items.map((item) => (
+              {group.items.filter(visible).map((item) => (
                 <Item key={item.href + item.label} item={item} />
               ))}
             </ul>
@@ -118,8 +121,8 @@ export function Sidebar({
       <div className="shrink-0 border-t border-line p-3">
         <div className="rounded-xl bg-surface-2 p-3">
           <div className="flex items-center justify-between">
-            <span className="text-[12px] font-semibold">Stage 01 · Foundation</span>
-            <span className="font-mono text-[10px] text-fg-faint">v0.1</span>
+            <span className="text-[12px] font-semibold">Stage 02 · Secure access</span>
+            <span className="font-mono text-[10px] text-fg-faint">v0.2</span>
           </div>
           <ul className="mt-2 space-y-1 text-[11.5px] text-fg-muted">
             <li className="flex items-center gap-1.5">
