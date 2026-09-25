@@ -16,6 +16,8 @@ import {
 import {
   ACTIVE_RUN_STATUSES,
   PROVIDER_LABELS,
+  API_EQUIVALENT_LABEL,
+  TRANSPORT_LABELS,
   formatUsd,
   titleCase,
   type AgentExecutionResult,
@@ -144,9 +146,17 @@ export function LiveRunMini({
           <dd className="num font-medium">{elapsed}</dd>
         </div>
         <div>
-          <dt className="text-fg-faint">{run.actualCostUsd !== null ? "Actual" : "Estimated"}</dt>
+          <dt className="text-fg-faint">
+            {run.billingMode === "subscription"
+              ? "Billing"
+              : run.actualCostUsd !== null
+                ? "Actual"
+                : "Estimated"}
+          </dt>
           <dd className="num font-medium">
-            {formatUsd(run.actualCostUsd ?? run.estimatedCostUsd)}
+            {run.billingMode === "subscription"
+              ? "Subscription"
+              : formatUsd(run.actualCostUsd ?? run.estimatedCostUsd)}
           </dd>
         </div>
       </dl>
@@ -314,13 +324,29 @@ export function LiveRunPanel({
         {elapsed}
       </span>,
     ],
-    ["Estimated cost", formatUsd(run.estimatedCostUsd)],
-    [
-      "Actual cost",
-      run.actualCostUsd !== null
-        ? `${formatUsd(run.actualCostUsd)}${run.isMock ? " (mock)" : ""}`
-        : "—",
-    ],
+    ...((run.billingMode === "subscription"
+      ? [
+          ["Billing", `Subscription · ${TRANSPORT_LABELS[run.transport]}`],
+          ["Actual API cost", "N/A — included in subscription"],
+          [
+            "API equivalent",
+            <span key="eq" title={API_EQUIVALENT_LABEL}>
+              {run.apiEquivalentUsd !== null ? `~${formatUsd(run.apiEquivalentUsd)}` : "—"}
+              <span className="block text-[10.5px] leading-tight text-fg-faint">
+                {API_EQUIVALENT_LABEL}
+              </span>
+            </span>,
+          ],
+        ]
+      : [
+          ["Estimated cost", formatUsd(run.estimatedCostUsd)],
+          [
+            "Actual cost",
+            run.actualCostUsd !== null
+              ? `${formatUsd(run.actualCostUsd)}${run.isMock ? " (mock)" : ""}`
+              : "—",
+          ],
+        ]) as [string, React.ReactNode][]),
   ];
   return (
     <div className="space-y-4" data-testid="live-run-panel">
@@ -328,7 +354,7 @@ export function LiveRunPanel({
         {facts.map(([k, v]) => (
           <div key={k} className="min-w-0">
             <dt className="text-fg-faint">{k}</dt>
-            <dd className="truncate font-medium">{v}</dd>
+            <dd className={typeof v === "string" ? "truncate font-medium" : "font-medium"}>{v}</dd>
           </div>
         ))}
       </dl>

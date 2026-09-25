@@ -10,7 +10,7 @@ Legend: **COMPLETE** · **BLOCKED** (implementation done, acceptance waiting on 
 | 02  | Authentication, Users, Roles & Permission Engine                    | COMPLETE |
 | 03  | Company Profiles, Knowledge, Brand Rules & Agent Context Engine     | COMPLETE |
 | 04  | Agent Roles, Permanent Instructions, Teams & Delegation Engine      | COMPLETE |
-| 05  | AI Provider Router, Claude Integration & First Real Agent Execution | BLOCKED  |
+| 05  | AI Provider Router, Claude Integration & First Real Agent Execution | COMPLETE |
 | 06  | Task orchestration & handoffs                                       | PLANNED  |
 | 07  | Claude integration                                                  | PLANNED  |
 | 08  | OpenAI integration                                                  | PLANNED  |
@@ -111,11 +111,18 @@ Legend: **COMPLETE** · **BLOCKED** (implementation done, acceptance waiting on 
 
 ## Stage 05 — AI Provider Router, Claude Integration & First Real Agent Execution
 
-- **Status:** BLOCKED — implementation complete; live acceptance requires Anthropic credential.
+- **Status:** COMPLETE (with correction 05A — Claude Code subscription transport is the default).
 - **Objective:** Route compiled instruction packs and context packs to AI providers; Claude integration; first real, governed agent execution.
 - **Dependencies:** Stage 04
-- **Unblock:** add `ANTHROPIC_API_KEY` (or an approved bearer credential) to the local `.env`, restart, run `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live`. Mark COMPLETE only when that live smoke run succeeds.
-- **Completion notes:**
+- **Acceptance (05A, replaces the API-credential requirement):** `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-subscription-live` passed all 11 checks on 2026-09-25 — real Claude Code 2.1.282 (subscription OAuth login, `apiKeySource` none/oauth, first-party), Sonnet (`claude-sonnet-5`) task and chat completed, streaming, persistence, audit, `SUBSCRIPTION` usage, API cost N/A. Run in the development cloud container signed in to the owner's Claude account; the CLI did not report the plan tier. Re-run it once on the owner's Mac after `claude login`.
+- **Stage 05A completion notes (Claude Code subscription transport):**
+  - Default `CLAUDE_TRANSPORT=claude_code`: `ClaudeCodeProvider` spawns the official `claude` CLI (`-p`, `stream-json`, `--tools ""`, `--strict-mcp-config`, `--safe-mode`, `--restricted`, `--no-session-persistence`; capabilities detected from `claude --help`), prompt on stdin, allowlisted child env (no API keys, no `ANTHROPIC_BASE_URL` unless allowed), SIGTERM/SIGKILL cancellation and timeouts, no orphans, concurrency 1.
+  - The OS implements no Claude login and reads no Claude credential; health via `claude --version` / `--help` / `auth status --json` → AVAILABLE / NOT_INSTALLED / LOGIN_REQUIRED / LOGIN_EXPIRED / RATE_LIMITED / UNAVAILABLE / MISCONFIGURED. API-key billing refused (`API_BILLING_REFUSED`), no API fallback, usage limit → `SUBSCRIPTION_LIMIT_REACHED`.
+  - Anthropic API transport kept as optional (`CLAUDE_TRANSPORT=anthropic_api`), disabled by default.
+  - Router stays provider-neutral (logical CLAUDE; transport/billing metadata only). Subscription runs: operational limits (runs per task/agent per day, request size, concurrency, premium policy) instead of dollars; actual API cost N/A with DB check constraints; NOT BILLED API-equivalent estimate; ledger `transport` / `billing_mode` / `rate_limit`.
+  - UI: Claude Code provider card (Pro subscription, Local Claude Code, Included subscription usage, API key Not used, usage state, TEST CLAUDE CODE, Terminal setup steps), subscription labels on preview/run/history/usage.
+  - Tests: fake Claude Code binary (installed/missing, login required/expired, rate limited, API-key refusal, old CLI, streaming, structured result, shell injection, env stripping, stop, timeout, concurrency, Opus unavailable) + DB/API/web/E2E updates — 334 Vitest + 12 Playwright; guarded `pnpm test:claude-subscription-live`.
+- **Stage 05 completion notes:**
   - Official Anthropic TypeScript SDK (Messages API, streaming, `output_config` effort + JSON-schema format, prompt caching, typed errors); no Claude Code CLI / Agent SDK. STANDARD = Claude Sonnet 5 (medium), PREMIUM = Claude Opus 5.5 (high, only when permitted); model IDs and efforts from env.
   - `AIProvider` contract + registry: Claude live, deterministic `MockClaudeProvider`, OpenAI/Grok placeholders (`PROVIDER_NOT_CONFIGURED`, no silent fallback), LOCAL deterministic. Deterministic router with recorded reasons.
   - `@aibos/execution-core`: authority/data message construction with injection boundaries, output-detail limits, ≤1 retry for transient typed errors honouring retry-after, timeouts, AbortSignal cancellation, durable response save, strict result validation, recovery (re-queue / NEEDS_REVIEW / finish saved response).
@@ -124,7 +131,7 @@ Legend: **COMPLETE** · **BLOCKED** (implementation done, acceptance waiting on 
   - UI: Run with agent (preview, tier/detail, live run panel, timeline, result, history, feedback), streamed Agent Chat with stop/retry/model indicator, Settings → AI Providers, company model policy, agent provider settings, live runs on Live Agents and Command Centre, real cost/usage with REAL/MOCK labels, manager run stats, Claude health row (Not configured ≠ error).
   - Permissions: task.execute, agent.chat, agent.run.view, agent.run.stop, provider.view, provider.test, provider.settings.manage. Audit actions listed in DATA_MODEL.md.
   - Tests: provider-core 15, execution-core 11, DB execution 13, API execution 11, web execution 7 (+ updated suites; 309 Vitest total), Playwright execution flows (mock mode) incl. run, chat, providers, isolation, stop; guarded `pnpm test:claude-live`.
-  - Live smoke: **not run** — no Anthropic credential in this environment.
+  - API-transport live smoke (`pnpm test:claude-live`): not run — no API credential (not required since 05A).
 
 ## Stage 06 — Task orchestration & handoffs
 

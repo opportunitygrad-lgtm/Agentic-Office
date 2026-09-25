@@ -3,9 +3,11 @@ import type { ProviderInput, RunSnapshot, RunStore, SavedResponse } from "@aibos
 import {
   costOfUsage,
   modelLabel,
+  type CliInfo,
   type ModelPrice,
   type ProviderRegistry,
   type ProviderResult,
+  type RateLimitState,
 } from "@aibos/provider-core";
 import {
   ACTIVE_RUN_STATUSES,
@@ -21,8 +23,11 @@ import {
   type AgentRunDetailDTO,
   type AgentRunEventDTO,
   type AgentRunStatus,
+  type BillingMode,
   type ProviderErrorCode,
+  type ProviderHealthState,
   type ProviderStatusDTO,
+  type ProviderTransport,
   type ProviderType,
   type RunEventType,
   type RunStreamMessage,
@@ -85,17 +90,38 @@ async function getRun(db: Db, runId: string): Promise<AgentRun> {
 
 /* ---------- provider health ---------- */
 
+const STATE_FOR_CODE: Partial<Record<ProviderErrorCode, ProviderHealthState>> = {
+  RATE_LIMITED: "rate_limited",
+  SUBSCRIPTION_LIMIT_REACHED: "rate_limited",
+  AUTH_ERROR: "auth_error",
+  PERMISSION_ERROR: "auth_error",
+  NOT_INSTALLED: "not_installed",
+  LOGIN_REQUIRED: "login_required",
+  LOGIN_EXPIRED: "login_expired",
+  MISCONFIGURED: "misconfigured",
+  API_BILLING_REFUSED: "misconfigured",
+  SERVER_ERROR: "degraded",
+  OVERLOADED: "degraded",
+  NETWORK_ERROR: "degraded",
+  TIMEOUT: "degraded",
+};
+
 /**
  * Health is driven by real call outcomes (no background polling):
- * success → AVAILABLE; 429 → RATE_LIMITED; auth → AUTH_ERROR; transient
- * failures → DEGRADED, and UNAVAILABLE after three in a row.
+ * success → AVAILABLE; usage/rate limit → RATE_LIMITED; login problems →
+ * LOGIN_REQUIRED / LOGIN_EXPIRED; transient failures → DEGRADED, and
+ * UNAVAILABLE after three in a row. Premium unavailability on a subscription
+ * only marks the premium model unavailable — standard work continues.
  */
 export async function recordProviderOutcome(
   db: Db,
   provider: ProviderType,
-  outcome: { ok: true } | { code: ProviderErrorCode },
+  outcome:
+    | { ok: true; rateLimit?: RateLimitState | null; tier?: string }
+    | { code: ProviderErrorCode; message?: string; tier?: string },
 ) {
   const now = new Date();
+  await db.insert(aiProviderSettings).values({ provider }).onConflictDoNothing();
   if ("ok" in outcome) {
     await db
       .update(aiProviderSettings)
@@ -104,29 +130,35 @@ export async function recordProviderOutcome(
         healthDetail: null,
         lastSuccessAt: now,
         consecutiveFailures: 0,
+        ...(outcome.rateLimit ? { rateLimit: outcome.rateLimit } : {}),
+        ...(outcome.tier === "premium" ? { premiumAvailable: true } : {}),
       })
       .where(eq(aiProviderSettings.provider, provider));
     return;
   }
   const code = outcome.code;
-  const transient = ["SERVER_ERROR", "OVERLOADED", "NETWORK_ERROR", "TIMEOUT"].includes(code);
-  const state =
-    code === "RATE_LIMITED"
-      ? "rate_limited"
-      : code === "AUTH_ERROR" || code === "PERMISSION_ERROR"
-        ? "auth_error"
-        : transient
-          ? "degraded"
-          : null;
+  if (code === "MODEL_UNAVAILABLE") {
+    if (outcome.tier === "premium")
+      await db
+        .update(aiProviderSettings)
+        .set({ premiumAvailable: false, lastErrorAt: now, lastErrorCode: code })
+        .where(eq(aiProviderSettings.provider, provider));
+    return;
+  }
+  const state = STATE_FOR_CODE[code] ?? null;
   if (!state) return; // request-specific errors (invalid request, refusal, cancellation) say nothing about health
+  const resetsAt = /resets ([0-9TZ:.-]+)/.exec(outcome.message ?? "")?.[1] ?? null;
   await db
     .update(aiProviderSettings)
     .set({
       healthState: sql`case when ${state} = 'degraded' and ${aiProviderSettings.consecutiveFailures} >= 2 then 'unavailable'::provider_health_state else ${state}::provider_health_state end`,
-      healthDetail: code,
+      healthDetail: outcome.message ?? code,
       lastErrorAt: now,
       lastErrorCode: code,
       consecutiveFailures: sql`${aiProviderSettings.consecutiveFailures} + 1`,
+      ...(state === "rate_limited"
+        ? { rateLimit: { status: "rejected", type: null, resetsAt } }
+        : {}),
     })
     .where(eq(aiProviderSettings.provider, provider));
 }
@@ -142,7 +174,9 @@ export async function providerStatuses(
       .select({
         provider: aiUsageRecords.provider,
         calls: sql<number>`count(*)::int`,
-        spend: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}), 0)::float8`,
+        // Only API-billed usage is spend; subscription rows are always 0 anyway.
+        spend: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.billingMode} = 'api'), 0)::float8`,
+        subscriptionRuns: sql<number>`count(*) filter (where ${aiUsageRecords.billingMode} = 'subscription')::int`,
       })
       .from(aiUsageRecords)
       .where(
@@ -159,24 +193,59 @@ export async function providerStatuses(
     const p = registry.get(provider);
     const s = settings.find((x) => x.provider === provider);
     const m = registry.models[provider];
+    const cliTransport = p.transport === "claude_code_cli";
     const configured = p.available();
-    const state = !configured
-      ? "not_configured"
-      : s?.healthState === "not_configured" || !s
-        ? "available"
-        : s.healthState;
+    const recorded = s?.healthState ?? null;
+    // Claude Code has no credential for the OS to inspect: its state comes from
+    // explicit Test Connection (local CLI checks) and real run outcomes.
+    const state: ProviderHealthState = cliTransport
+      ? p.isMock
+        ? configured
+          ? "available"
+          : "login_required"
+        : (recorded ?? "not_configured")
+      : !configured
+        ? "not_configured"
+        : recorded === "not_configured" || !recorded
+          ? "available"
+          : recorded;
     const u = usage.find((x) => x.provider === provider);
-    return {
-      provider,
-      label: PROVIDER_LABELS[provider],
-      connected: configured,
-      isMock: p.isMock,
-      state,
-      detail: !configured
+    const cli = (s?.cliInfo ?? null) as CliInfo | null;
+    const rateLimit = (s?.rateLimit ?? null) as RateLimitState | null;
+    const detail = cliTransport
+      ? state === "not_configured"
+        ? "Claude Code has not been checked yet — click TEST CLAUDE CODE."
+        : (s?.healthDetail ??
+          (p.isMock ? "Deterministic mock Claude Code — no AI is called" : null))
+      : !configured
         ? provider === "CLAUDE"
           ? "Anthropic credential not configured. Add ANTHROPIC_API_KEY or an approved bearer credential to the local .env and restart the services."
           : "Not connected in this stage"
-        : (s?.healthDetail ?? (p.isMock ? "Deterministic mock provider — no AI is called" : null)),
+        : (s?.healthDetail ?? (p.isMock ? "Deterministic mock provider — no AI is called" : null));
+    return {
+      provider,
+      label: PROVIDER_LABELS[provider],
+      connected: cliTransport ? state === "available" : configured,
+      isMock: p.isMock,
+      state,
+      detail,
+      transport: p.transport,
+      authMode: p.authMode,
+      billingMode: p.billingMode,
+      cli: cliTransport
+        ? {
+            binary: cli?.binary ?? (p.isMock ? "mock" : "claude"),
+            version: cli?.version ?? null,
+            authMethod: cli?.authMethod ?? null,
+            subscriptionType: cli?.subscriptionType ?? null,
+            maxConcurrency: (p as unknown as { maxConcurrency?: number }).maxConcurrency ?? 1,
+          }
+        : null,
+      premiumAvailable: s?.premiumAvailable ?? null,
+      rateLimit: rateLimit
+        ? { status: rateLimit.status, resetsAt: rateLimit.resetsAt, type: rateLimit.type }
+        : null,
+      runsToday: u?.subscriptionRuns ?? 0,
       enabled: s?.enabled ?? true,
       standardModel: m ? (s?.standardModel ?? m.standardModel) : null,
       premiumModel: m ? (s?.premiumModel ?? m.premiumModel) : null,
@@ -245,6 +314,8 @@ export async function testProviderConnection(
       healthState: health.state,
       healthDetail: health.detail,
       lastHealthCheckAt: health.checkedAt,
+      // CLI facts only (version, auth method, plan) — never credentials.
+      ...(health.cli !== undefined ? { cliInfo: health.cli } : {}),
       ...(health.state === "available" && p.available()
         ? { lastSuccessAt: health.checkedAt, consecutiveFailures: 0 }
         : {}),
@@ -257,7 +328,13 @@ export async function testProviderConnection(
     action: provider === "CLAUDE" ? "claude.connection_tested" : "provider.connection_tested",
     description: `${p.displayName} connection test: ${health.state}`,
     outcome: health.state === "available" ? "success" : "failure",
-    metadata: { state: health.state, detail: health.detail, isMock: p.isMock },
+    metadata: {
+      state: health.state,
+      detail: health.detail,
+      isMock: p.isMock,
+      transport: p.transport,
+      cliVersion: health.cli?.version ?? null,
+    },
   });
   return health;
 }
@@ -475,14 +552,14 @@ export function createRunStore(
           description: `${run.provider} ${run.model} call started (attempt ${attempt + 1})`,
         });
     },
-    async markProviderCallFailed(runId, attempt, code) {
+    async markProviderCallFailed(runId, attempt, code, message) {
       const [run] = await db
         .update(agentRuns)
         .set({ providerCallStartedAt: null })
         .where(eq(agentRuns.id, runId))
         .returning();
       if (!run) return;
-      await recordProviderOutcome(db, run.provider, { code });
+      await recordProviderOutcome(db, run.provider, { code, message, tier: run.tier });
       await recordAuditEvent(db, {
         ...workerAudit(run),
         action: "provider.call_failed",
@@ -503,7 +580,13 @@ export function createRunStore(
         const run = await getRun(tx, runId);
         if (run.responseSavedAt) return; // idempotent
         const price = run.priceSnapshot as ModelPrice | null;
-        const cost = price ? costOfUsage(price, result.usage) : 0;
+        // Subscription (Claude Code) usage is included in the plan: actual API
+        // cost is N/A (stored as NULL on the run, 0 in the ledger) and only a
+        // clearly-labelled, NOT BILLED API-equivalent estimate is kept.
+        const subscription = run.billingMode === "subscription";
+        const usageCost = price ? costOfUsage(price, result.usage) : 0;
+        const cost = subscription ? 0 : usageCost;
+        const apiEquivalent = subscription && price ? usageCost : null;
         await tx
           .update(agentRuns)
           .set({
@@ -515,7 +598,8 @@ export function createRunStore(
             outputTokens: result.usage.outputTokens,
             cacheCreationTokens: result.usage.cacheCreationTokens,
             cacheReadTokens: result.usage.cacheReadTokens,
-            actualCost: cost,
+            actualCost: subscription ? null : cost,
+            apiEquivalentCost: apiEquivalent,
             latencyMs: result.latencyMs,
             responseSavedAt: new Date(),
           })
@@ -523,7 +607,8 @@ export function createRunStore(
         // Mock runs are recorded as development data so they never count as real spend.
         await tx.insert(aiUsageRecords).values({
           provider: run.provider,
-          model: run.model,
+          // The model that actually ran (Claude Code resolves aliases such as "sonnet").
+          model: result.model || run.model,
           companyId: run.companyId,
           agentId: run.agentId,
           taskId: run.taskId,
@@ -538,9 +623,17 @@ export function createRunStore(
           estimatedCost: run.estimatedCost,
           actualCost: cost,
           priceSnapshot: price,
+          transport: run.transport,
+          billingMode: run.billingMode,
+          apiEquivalentCost: apiEquivalent,
+          rateLimit: result.rateLimit ?? null,
           origin: run.isMock ? "dev_seed" : "live",
         });
-        await recordProviderOutcome(tx, run.provider, { ok: true });
+        await recordProviderOutcome(tx, run.provider, {
+          ok: true,
+          rateLimit: result.rateLimit,
+          tier: run.tier,
+        });
         await recordAuditEvent(tx, {
           ...workerAudit(run),
           action: "provider.call_completed",
@@ -554,8 +647,17 @@ export function createRunStore(
         await recordAuditEvent(tx, {
           ...workerAudit(run),
           action: "ai.usage_recorded",
-          description: `AI usage recorded: $${cost} (${result.usage.inputTokens} in / ${result.usage.outputTokens} out${run.isMock ? ", mock" : ""})`,
-          metadata: { ...result.usage, costUsd: cost, isMock: run.isMock },
+          description: subscription
+            ? `Subscription usage recorded (${result.usage.inputTokens} in / ${result.usage.outputTokens} out${run.isMock ? ", mock" : ""}) — no API cost`
+            : `AI usage recorded: $${cost} (${result.usage.inputTokens} in / ${result.usage.outputTokens} out${run.isMock ? ", mock" : ""})`,
+          metadata: {
+            ...result.usage,
+            costUsd: cost,
+            billingMode: run.billingMode,
+            transport: run.transport,
+            apiEquivalentUsd: apiEquivalent,
+            isMock: run.isMock,
+          },
         });
       });
       const run = await getRun(db, runId);
@@ -568,8 +670,15 @@ export function createRunStore(
       await event(
         runId,
         "USAGE_RECORDED",
-        `$${run.actualCost ?? 0}${run.isMock ? " (mock)" : ""}`,
-        { ...result.usage, costUsd: run.actualCost },
+        run.billingMode === "subscription"
+          ? `Subscription usage${run.isMock ? " (mock)" : ""} — no API cost`
+          : `$${run.actualCost ?? 0}${run.isMock ? " (mock)" : ""}`,
+        {
+          ...result.usage,
+          costUsd: run.actualCost,
+          billingMode: run.billingMode,
+          apiEquivalentUsd: run.apiEquivalentCost,
+        },
       );
     },
     async loadSavedResponse(runId): Promise<ProviderResult | null> {
@@ -666,9 +775,13 @@ export function createRunStore(
         await recordAuditEvent(tx, {
           ...workerAudit(r),
           action: "agent_run.completed",
-          description: `Agent run completed ($${r.actualCost ?? 0})`,
+          description:
+            r.billingMode === "subscription"
+              ? "Agent run completed (Claude subscription — no API cost)"
+              : `Agent run completed ($${r.actualCost ?? 0})`,
           metadata: {
             costUsd: r.actualCost,
+            billingMode: r.billingMode,
             latencyMs: r.latencyMs,
             status: structured?.status ?? "text",
           },
@@ -1077,7 +1190,10 @@ export async function listRuns(
               cacheReadTokens: r.cacheReadTokens ?? 0,
             },
       estimatedCostUsd: r.estimatedCost,
-      actualCostUsd: r.actualCost,
+      actualCostUsd: r.billingMode === "subscription" ? null : r.actualCost,
+      transport: r.transport as ProviderTransport,
+      billingMode: r.billingMode as BillingMode,
+      apiEquivalentUsd: r.apiEquivalentCost,
       latencyMs: r.latencyMs,
       stopReason: r.stopReason,
       retryCount: r.retryCount,

@@ -1,11 +1,13 @@
 import type {
   AgentCapability,
+  BillingMode,
   EffortLevel,
   ModelTier,
+  ProviderTransport,
   ProviderType,
   RouteDecisionDTO,
 } from "@aibos/shared";
-import { modelLabel, type ProviderModelConfig } from "./models";
+import { modelLabel, priceModelFor, type ProviderModelConfig } from "./models";
 import { estimateCost } from "./pricing";
 import type { ModelPrice } from "./types";
 
@@ -23,6 +25,11 @@ export interface ProviderAvailability {
   isMock: boolean;
   /** Supports reasoning-only execution. */
   reasoning: boolean;
+  /** Resolved by configuration (CLAUDE_TRANSPORT); the router never switches transport. */
+  transport: ProviderTransport;
+  billingMode: BillingMode;
+  /** Why the provider cannot run now (e.g. "Claude Code login required"). */
+  unavailableReason?: string | null;
 }
 
 export interface RouteInput {
@@ -73,6 +80,9 @@ const blocked = (
   approvalRequired: false,
   blockedReason: reason,
   isMock: false,
+  transport: "none",
+  billingMode: "none",
+  apiEquivalentUsd: null,
   ...extra,
 });
 
@@ -89,6 +99,7 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
   const info = (p: ProviderType) => input.providers.find((x) => x.provider === p);
   const usable = (p: ProviderType) =>
     allowed.has(p) && !!info(p)?.available && !!info(p)?.reasoning;
+  const why = (p: ProviderType) => info(p)?.unavailableReason ?? `${p} is not connected`;
 
   // 1. Deterministic local work.
   const caps = input.task?.requiredCapabilities ?? [];
@@ -107,6 +118,9 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
       approvalRequired: false,
       blockedReason: null,
       isMock: false,
+      transport: "local",
+      billingMode: "none",
+      apiEquivalentUsd: null,
     };
   }
 
@@ -119,7 +133,7 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
       return blocked(`Task requires ${requirement}, which company policy does not allow`, reasons);
     if (!usable(requirement))
       return blocked(
-        `PROVIDER_NOT_CONFIGURED: task requires ${requirement}, which is not connected`,
+        `PROVIDER_NOT_CONFIGURED: task requires ${requirement} — ${why(requirement)}`,
         reasons,
       );
     provider = requirement;
@@ -135,7 +149,7 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
       provider = first.p;
       reasons.push(`${first.p}: ${first.why}`);
     } else {
-      reasons.push(`${first.p} (${first.why}) is not connected`);
+      reasons.push(`${first.p} (${first.why}): ${why(first.p)}`);
       // 8. Fallback only when policy explicitly permits it.
       const fb = input.agent.fallbackProvider;
       if (input.company.fallbackAllowed && fb && usable(fb)) {
@@ -143,7 +157,7 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
         reasons.push(`${fb}: approved fallback (company policy permits fallback)`);
       } else {
         return blocked(
-          `PROVIDER_NOT_CONFIGURED: ${first.p} is not connected${input.company.fallbackAllowed ? " and no usable fallback" : "; fallback not permitted by company policy"}`,
+          `PROVIDER_NOT_CONFIGURED: ${why(first.p)}${input.company.fallbackAllowed ? " and no usable fallback" : "; fallback not permitted by company policy"}`,
           reasons,
         );
       }
@@ -180,13 +194,22 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
   const agentEffort = input.agent.defaultEffort;
   const effort =
     agentEffort && EFFORT_RANK[agentEffort] < EFFORT_RANK[tierEffort] ? agentEffort : tierEffort;
-  const price = input.price(provider, model);
-  if (!price)
+  const transport = info(provider)?.transport ?? "none";
+  const billingMode = info(provider)?.billingMode ?? "api";
+  // API billing needs a price to control cost. Subscription runs are governed by
+  // operational limits; their price only feeds the NOT BILLED API-equivalent estimate.
+  const price = input.price(
+    provider,
+    billingMode === "subscription" ? priceModelFor(model) : model,
+  );
+  if (!price && billingMode === "api")
     return blocked(`No price configured for ${model} — cost cannot be controlled`, reasons, {
       provider,
     });
   const est = estimateCost(price, { provider, model, ...input.estimate });
   reasons.push(`${modelLabel(model)} at ${effort} effort`);
+  if (billingMode === "subscription")
+    reasons.push("Claude subscription via local Claude Code — included usage, no API billing");
   return {
     provider,
     model,
@@ -196,10 +219,13 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
     reasons,
     estimatedInputTokens: est.inputTokens,
     estimatedOutputTokens: est.outputTokens,
-    estimatedCostUsd: est.costUsd,
+    estimatedCostUsd: billingMode === "subscription" ? 0 : est.costUsd,
     fallbackProvider: fallback,
     approvalRequired: false,
     blockedReason: null,
     isMock: !!info(provider)?.isMock,
+    transport,
+    billingMode,
+    apiEquivalentUsd: billingMode === "subscription" && price ? est.costUsd : null,
   };
 }

@@ -1,6 +1,6 @@
 import type { ProviderCapability } from "@aibos/shared";
 import { estimateCost, estimateTokens } from "./pricing";
-import type { ProviderModelConfig } from "./models";
+import { priceModelFor, type ProviderModelConfig } from "./models";
 import {
   ProviderError,
   type AIProvider,
@@ -21,6 +21,8 @@ export interface MockClaudeOptions {
   result?: (request: ProviderRequest) => unknown;
   /** Pretend credentials are missing. */
   configured?: boolean;
+  /** Which Claude transport to impersonate (default: Claude Code subscription). */
+  transport?: "claude_code_cli" | "anthropic_api";
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -47,6 +49,9 @@ export class MockClaudeProvider implements AIProvider {
   readonly providerId = "CLAUDE" as const;
   readonly displayName = "Claude (mock)";
   readonly isMock = true;
+  readonly transport: "claude_code_cli" | "anthropic_api";
+  readonly authMode: "subscription_login" | "api_key";
+  readonly billingMode: "subscription" | "api";
   readonly calls: ProviderRequest[] = [];
   private readonly seenPrefixes = new Set<string>();
   private readonly inflight = new Map<string, AbortController>();
@@ -57,6 +62,9 @@ export class MockClaudeProvider implements AIProvider {
     private readonly options: MockClaudeOptions = {},
   ) {
     this.failures = [...(options.failures ?? [])];
+    this.transport = options.transport ?? "claude_code_cli";
+    this.authMode = this.transport === "claude_code_cli" ? "subscription_login" : "api_key";
+    this.billingMode = this.transport === "claude_code_cli" ? "subscription" : "api";
   }
 
   available(): boolean {
@@ -77,13 +85,30 @@ export class MockClaudeProvider implements AIProvider {
   async healthCheck(opts: { probe?: boolean } = {}): Promise<ProviderHealthResult> {
     return {
       provider: "CLAUDE",
-      state: this.available() ? "available" : "not_configured",
+      state: this.available()
+        ? "available"
+        : this.transport === "claude_code_cli"
+          ? "login_required"
+          : "not_configured",
       checkedAt: new Date(),
       detail: this.available()
         ? opts.probe
           ? "Mock connection verified"
           : "Mock provider"
-        : "Mock provider not configured",
+        : this.transport === "claude_code_cli"
+          ? "Login required. Open Terminal and run: claude login"
+          : "Mock provider not configured",
+      cli:
+        this.transport === "claude_code_cli"
+          ? {
+              binary: "mock",
+              version: "mock",
+              loggedIn: this.available(),
+              authMethod: "mock",
+              apiProvider: "firstParty",
+              subscriptionType: null,
+            }
+          : null,
     };
   }
   execute(request: ProviderRequest): Promise<ProviderResult> {
@@ -92,9 +117,13 @@ export class MockClaudeProvider implements AIProvider {
 
   async stream(request: ProviderRequest, handlers: StreamHandlers): Promise<ProviderResult> {
     if (!this.available())
-      throw new ProviderError("PROVIDER_NOT_CONFIGURED", "Anthropic credential not configured", {
-        provider: "CLAUDE",
-      });
+      throw this.transport === "claude_code_cli"
+        ? new ProviderError("LOGIN_REQUIRED", "Login required. Run in Terminal: claude login", {
+            provider: "CLAUDE",
+          })
+        : new ProviderError("PROVIDER_NOT_CONFIGURED", "Anthropic credential not configured", {
+            provider: "CLAUDE",
+          });
     this.calls.push(request);
     const controller = new AbortController();
     request.signal?.addEventListener("abort", () => controller.abort(), { once: true });
@@ -127,7 +156,8 @@ export class MockClaudeProvider implements AIProvider {
       const allInput = estimateTokens(request.system.map((b) => b.text).join("\n") + userText);
       return {
         provider: "CLAUDE",
-        model: request.model,
+        // Claude Code reports the resolved model for an alias; mimic that.
+        model: this.transport === "claude_code_cli" ? priceModelFor(request.model) : request.model,
         text: output,
         structured: request.output.kind === "structured" ? JSON.parse(output) : null,
         stopReason: "end_turn",

@@ -78,6 +78,44 @@ export function chatHistoryLimit(env: Record<string, string | undefined> = proce
   return Number.isInteger(n) && n >= 0 ? Math.min(n, 100) : 12;
 }
 
+/**
+ * Operational limits for subscription (Claude Code) runs. A Claude Pro plan is
+ * usage-limited, not dollar-billed, so runs are bounded by counts and size
+ * instead of per-call dollars (API dollar budgets still apply to API billing).
+ */
+export interface SubscriptionLimits {
+  maxRunsPerTaskPerDay: number;
+  maxRunsPerAgentPerDay: number;
+  maxInputTokens: number;
+}
+export const DEFAULT_SUBSCRIPTION_LIMITS: SubscriptionLimits = {
+  maxRunsPerTaskPerDay: 10,
+  maxRunsPerAgentPerDay: 40,
+  maxInputTokens: 60_000,
+};
+export function subscriptionLimitsFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): SubscriptionLimits {
+  const int = (v: string | undefined, d: number) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n > 0 ? n : d;
+  };
+  return {
+    maxRunsPerTaskPerDay: int(
+      env.CLAUDE_CODE_MAX_RUNS_PER_TASK_DAY,
+      DEFAULT_SUBSCRIPTION_LIMITS.maxRunsPerTaskPerDay,
+    ),
+    maxRunsPerAgentPerDay: int(
+      env.CLAUDE_CODE_MAX_RUNS_PER_AGENT_DAY,
+      DEFAULT_SUBSCRIPTION_LIMITS.maxRunsPerAgentPerDay,
+    ),
+    maxInputTokens: int(
+      env.CLAUDE_CODE_MAX_INPUT_TOKENS,
+      DEFAULT_SUBSCRIPTION_LIMITS.maxInputTokens,
+    ),
+  };
+}
+
 export function recentHistory<T>(messages: T[], limit: number): { kept: T[]; dropped: number } {
   const kept = limit === 0 ? [] : messages.slice(-limit);
   return { kept, dropped: messages.length - kept.length };

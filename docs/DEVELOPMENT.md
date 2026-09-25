@@ -79,33 +79,53 @@ Prompts for the password; refuses if any user exists. See docs/SECURITY.md.
 
 Targeted runs: `pnpm --filter @aibos/api test`, `pnpm --filter @aibos/web test`.
 
-## Claude configuration (Stage 05)
+## Claude configuration (Stage 05A — Claude Code subscription)
 
-Add a credential to the local `.env` (never commit it, never paste it into a
-chat) and restart `pnpm dev`:
+Claude runs through **your own Claude Code login** (Claude Pro subscription).
+No API key is needed. In Terminal, on the machine and user account that run
+`pnpm dev` (the worker):
+
+```bash
+unset ANTHROPIC_API_KEY
+unset ANTHROPIC_AUTH_TOKEN
+claude logout
+claude login          # choose your Claude Pro subscription
+```
+
+Then open Settings → AI Providers and click **TEST CLAUDE CODE**. Never paste
+Claude credentials into this app or into a chat — the app never asks for them.
+Defaults (`.env`):
 
 ```
-ANTHROPIC_API_KEY=...            # or ANTHROPIC_AUTH_TOKEN=... (approved bearer)
-# ANTHROPIC_WORKSPACE_ID=...     # optional
-CLAUDE_DEFAULT_MODEL=claude-sonnet-5
-CLAUDE_PREMIUM_MODEL=claude-opus-5-5
-CLAUDE_DEFAULT_EFFORT=medium
-CLAUDE_PREMIUM_EFFORT=high
+CLAUDE_TRANSPORT=claude_code
+CLAUDE_CODE_BINARY=claude
+CLAUDE_CODE_MODEL=sonnet
+CLAUDE_CODE_EFFORT=medium
+CLAUDE_CODE_MAX_CONCURRENCY=1
 AI_PROVIDER_TIMEOUT_MS=180000
 CHAT_HISTORY_MAX_MESSAGES=12
 ```
 
-Without a credential Settings → AI Providers shows Claude as _Not configured_
-and runs are blocked with a clear message.
+If Claude Code is missing or logged out, the provider card shows the steps
+and runs are blocked with the Terminal instruction. Optional API billing:
+set `CLAUDE_TRANSPORT=anthropic_api` plus `ANTHROPIC_API_KEY` (see
+`.env.example`); it is never used as a fallback.
 
 - **Mock mode (no credit):** `AIBOS_AI_PROVIDER_MODE=mock pnpm dev` uses the
   deterministic mock Claude in API and worker (optionally
-  `AIBOS_MOCK_CHUNK_DELAY_MS=60` to watch streaming). Required for the
-  execution E2E spec, which skips itself otherwise. Refused in production.
-- **Live smoke:** `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live` — one
-  connection test, one short Sonnet task on a `[DEV SMOKE TEST]` EPT task and
-  one chat; prints tokens, cost and latency. Never part of `pnpm test` or
-  `pnpm test:e2e`, never uses Opus.
+  `AIBOS_MOCK_CHUNK_DELAY_MS=150` to watch streaming). Required for the
+  execution E2E spec, which skips itself otherwise; run it with
+  `AIBOS_MOCK_CHUNK_DELAY_MS=150` so the stop-run flow has time to stop
+  mid-stream. Refused in production.
+- **Fake Claude Code (no usage):** `CLAUDE_CODE_BINARY=$PWD/packages/provider-core/test/fixtures/fake-claude.mjs`
+  runs the real spawn/stream path against a scripted CLI (scenario in
+  `$CLAUDE_CONFIG_DIR/scenario.json`).
+- **Live subscription smoke (acceptance):**
+  `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-subscription-live` — CLI/login
+  checks, one short Sonnet task on a `[DEV SMOKE TEST]` EPT task and one chat;
+  verifies streaming, persistence, audit and SUBSCRIPTION usage (API cost N/A).
+  Never part of `pnpm test` or `pnpm test:e2e`, never uses Opus.
+- Optional API transport smoke: `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live`.
 
 ## Tests
 

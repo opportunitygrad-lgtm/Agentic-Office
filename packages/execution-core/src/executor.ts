@@ -58,7 +58,13 @@ export interface RunStore {
   /** Re-verifies authority/isolation and builds context + instructions + provider input. */
   prepare(runId: string): Promise<ProviderInput>;
   markProviderCallStarted(runId: string, attempt: number): Promise<void>;
-  markProviderCallFailed(runId: string, attempt: number, code: ProviderErrorCode): Promise<void>;
+  /** `message` is the normalised ProviderError message (never raw vendor output). */
+  markProviderCallFailed(
+    runId: string,
+    attempt: number,
+    code: ProviderErrorCode,
+    message?: string,
+  ): Promise<void>;
   /** Durable save of provider output + usage ledger + cost (idempotent per run). */
   saveResponse(runId: string, result: ProviderResult): Promise<void>;
   loadSavedResponse(runId: string): Promise<ProviderResult | null>;
@@ -190,7 +196,7 @@ export async function executeRun(runId: string, opts: ExecuteOptions): Promise<E
         break;
       } catch (e) {
         const err = e instanceof ProviderError ? e : provider.normalizeError(e);
-        await store.markProviderCallFailed(runId, attempt, err.code);
+        await store.markProviderCallFailed(runId, attempt, err.code, err.message);
         if (err.code === "CANCELLED" || controller.signal.aborted)
           return cancelledOr(runId, store, true);
         const { retry, delayMs } = retryDecision(err, attempt, {

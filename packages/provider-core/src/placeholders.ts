@@ -18,6 +18,9 @@ import {
 export class NotConnectedProvider implements AIProvider {
   readonly displayName: string;
   readonly isMock = false;
+  readonly transport = "none" as const;
+  readonly authMode = "none" as const;
+  readonly billingMode = "none" as const;
   constructor(readonly providerId: ProviderType) {
     this.displayName = PROVIDER_LABELS[providerId];
   }
@@ -66,6 +69,9 @@ export class LocalProvider implements AIProvider {
   readonly providerId = "LOCAL" as const;
   readonly displayName = "Local logic";
   readonly isMock = false;
+  readonly transport = "local" as const;
+  readonly authMode = "none" as const;
+  readonly billingMode = "none" as const;
   available(): boolean {
     return true;
   }

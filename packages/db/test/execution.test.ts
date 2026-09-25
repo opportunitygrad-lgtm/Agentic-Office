@@ -10,6 +10,8 @@ import {
 import type { RunStreamMessage } from "@aibos/shared";
 import {
   assignTask,
+  previewTaskRun as preview,
+  usageSummary,
   createConversation,
   createRunStore,
   createWorkforceTask,
@@ -70,7 +72,9 @@ beforeAll(async () => {
     .where(eq(schema.users.email, "owner@aibos.example"));
   actor = { kind: "human", ref: "owner@aibos.example", userId: owner!.id };
   EPT = (await resolveCompany(db, "euro-pilot-training"))!.id;
-  registry = createProviderRegistry({ mode: "mock", env: {} });
+  // These suites cover the OPTIONAL Anthropic API transport (dollar budgets,
+  // reservations, approvals). Subscription mode has its own suite below.
+  registry = createProviderRegistry({ mode: "mock", env: { CLAUDE_TRANSPORT: "anthropic_api" } });
   env = { registry, timeoutMs: 30_000, historyLimit: 4 };
 });
 afterAll(() => handle.close());
@@ -459,5 +463,222 @@ describe("chat execution", () => {
       (await startChatRun(db, env, cid, "Hello again", actor, { viewerMaxSensitivity: "internal" }))
         .existing,
     ).toBe(false);
+  });
+});
+
+describe("Claude Code subscription mode (default transport)", () => {
+  const subRegistry = () => createProviderRegistry({ mode: "mock", env: {} });
+  const subEnv = (reg: ProviderRegistry, limits = {}): ExecutionEnv => ({
+    registry: reg,
+    timeoutMs: 30_000,
+    historyLimit: 4,
+    subscriptionLimits: {
+      maxRunsPerTaskPerDay: 10,
+      maxRunsPerAgentPerDay: 40,
+      maxInputTokens: 60_000,
+      ...limits,
+    },
+  });
+  const settings = async () =>
+    (
+      await db
+        .select()
+        .from(schema.aiProviderSettings)
+        .where(eq(schema.aiProviderSettings.provider, "CLAUDE"))
+    )[0]!;
+  const resetHealth = () =>
+    db
+      .update(schema.aiProviderSettings)
+      .set({
+        healthState: "available",
+        healthDetail: null,
+        rateLimit: null,
+        premiumAvailable: null,
+      })
+      .where(eq(schema.aiProviderSettings.provider, "CLAUDE"));
+
+  it("routes to Sonnet via Claude Code with no API spend and operational limits instead of dollars", async () => {
+    await resetHealth();
+    const reg = subRegistry();
+    const e = subEnv(reg);
+    const id = await newTask("Subscription summary of EPT priorities");
+    const p = await preview(db, e, id, { viewerMaxSensitivity: "internal" });
+    expect(p.route).toMatchObject({
+      provider: "CLAUDE",
+      model: "sonnet",
+      transport: "claude_code_cli",
+      billingMode: "subscription",
+      estimatedCostUsd: 0,
+    });
+    expect(p.route.apiEquivalentUsd).toBeGreaterThan(0);
+    expect(p.budget.decision).toBe("allowed");
+    expect(p.budget.checks.map((c) => c.scope)).toEqual([
+      "subscription_task_runs",
+      "subscription_agent_daily_runs",
+      "subscription_input_size",
+    ]);
+
+    const started = await startTaskRun(db, e, id, {}, actor, { viewerMaxSensitivity: "internal" });
+    const runId = (started as { runId: string }).runId;
+    expect(await runRow(runId)).toMatchObject({
+      transport: "claude_code_cli",
+      billingMode: "subscription",
+      reservedCost: 0,
+    });
+    expect(
+      await executeRun(runId, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: reg.get("CLAUDE"),
+      }),
+    ).toBe("completed");
+    const run = await runRow(runId);
+    expect(run.actualCost).toBeNull(); // N/A — included in the subscription
+    expect(run.apiEquivalentCost).toBeGreaterThan(0); // NOT BILLED estimate only
+    const [usage] = await db
+      .select()
+      .from(schema.aiUsageRecords)
+      .where(eq(schema.aiUsageRecords.runId, runId));
+    expect(usage).toMatchObject({
+      billingMode: "subscription",
+      transport: "claude_code_cli",
+      actualCost: 0,
+      providerCost: 0,
+      model: "claude-sonnet-5",
+    });
+    // Subscription usage never becomes spend, even if written as live data.
+    await db
+      .update(schema.aiUsageRecords)
+      .set({ origin: "live" })
+      .where(eq(schema.aiUsageRecords.runId, runId));
+    const summary = await usageSummary(db, EPT);
+    const claude = summary.providers.find((x) => x.provider === "CLAUDE")!;
+    expect(claude).toMatchObject({ billingMode: "subscription", todayUsd: 0 });
+    expect(claude.subscriptionRunsToday).toBeGreaterThanOrEqual(1);
+    expect(claude.apiEquivalentMonthUsd).toBeGreaterThan(0);
+    // The database itself refuses a subscription row carrying API cost.
+    await expect(
+      db
+        .update(schema.aiUsageRecords)
+        .set({ actualCost: 1 })
+        .where(eq(schema.aiUsageRecords.runId, runId)),
+    ).rejects.toThrow();
+    await db
+      .update(schema.aiUsageRecords)
+      .set({ origin: "dev_seed" })
+      .where(eq(schema.aiUsageRecords.runId, runId));
+  });
+
+  it("blocks by subscription run limits and request size (never by dollars or approval)", async () => {
+    await resetHealth();
+    const reg = subRegistry();
+    const id = await newTask("Subscription limit check");
+    const first = await startTaskRun(db, subEnv(reg), id, {}, actor, {
+      viewerMaxSensitivity: "internal",
+    });
+    await requestRunCancel(db, (first as { runId: string }).runId, actor);
+    const limited = subEnv(reg, { maxRunsPerTaskPerDay: 1 });
+    const p = await preview(db, limited, id, { viewerMaxSensitivity: "internal" });
+    expect(p.budget.decision).toBe("blocked");
+    expect(p.reasons.join(" ")).toMatch(/limit of 1 Claude subscription runs today/);
+    const tiny = await preview(db, subEnv(reg, { maxInputTokens: 10 }), id, {
+      viewerMaxSensitivity: "internal",
+    });
+    expect(tiny.budget.decision).toBe("blocked");
+    expect(tiny.reasons.join(" ")).toMatch(/token limit for subscription runs/);
+  });
+
+  it("login expiry and usage limits stop Claude with no hidden API fallback", async () => {
+    await resetHealth();
+    const reg = subRegistry();
+    const e = subEnv(reg);
+    const id = await newTask("Login expiry path");
+    const { runId } = (await startTaskRun(db, e, id, {}, actor, {
+      viewerMaxSensitivity: "internal",
+    })) as { runId: string };
+    const expired = new MockClaudeProvider(reg.models.CLAUDE!, {
+      failures: [
+        new ProviderError("LOGIN_EXPIRED", "Claude login expired. Run in Terminal: claude login"),
+      ],
+    });
+    expect(
+      await executeRun(runId, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: expired,
+      }),
+    ).toBe("failed");
+    expect(await runRow(runId)).toMatchObject({
+      status: "failed",
+      errorCode: "LOGIN_EXPIRED",
+      provider: "CLAUDE",
+      billingMode: "subscription",
+    });
+    expect(await settings()).toMatchObject({ healthState: "login_expired" });
+    // Routing now refuses Claude with the login instruction — and never switches to API billing.
+    const blocked = await preview(db, e, await newTask("After expiry"), {
+      viewerMaxSensitivity: "internal",
+    });
+    expect(blocked.eligible).toBe(false);
+    expect(blocked.route.provider).toBeNull();
+    expect(blocked.reasons.join(" ")).toMatch(/claude login/);
+
+    await resetHealth();
+    const id2 = await newTask("Usage limit path");
+    const { runId: r2 } = (await startTaskRun(db, e, id2, {}, actor, {
+      viewerMaxSensitivity: "internal",
+    })) as { runId: string };
+    const limited = new MockClaudeProvider(reg.models.CLAUDE!, {
+      failures: [
+        new ProviderError(
+          "SUBSCRIPTION_LIMIT_REACHED",
+          "Claude Pro usage limit reached (resets 2099-01-01T00:00:00.000Z). No API fallback is used.",
+        ),
+      ],
+    });
+    expect(
+      await executeRun(r2, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: limited,
+      }),
+    ).toBe("failed");
+    expect(limited.calls).toHaveLength(1); // one attempt, no retry
+    expect(await settings()).toMatchObject({
+      healthState: "rate_limited",
+      rateLimit: { status: "rejected", resetsAt: "2099-01-01T00:00:00.000Z" },
+    });
+    const p = await preview(db, e, await newTask("After usage limit"), {
+      viewerMaxSensitivity: "internal",
+    });
+    expect(p.reasons.join(" ")).toMatch(/usage limit reached/);
+    await resetHealth();
+  });
+
+  it("an unavailable Opus marks premium unavailable without breaking Sonnet work", async () => {
+    await resetHealth();
+    await db
+      .update(schema.companyAiPolicies)
+      .set({ premiumAllowed: true })
+      .where(eq(schema.companyAiPolicies.companyId, EPT));
+    const reg = subRegistry();
+    const e = subEnv(reg);
+    const id = await newTask("Premium on subscription");
+    const { runId } = (await startTaskRun(db, e, id, { modelTier: "premium" }, actor, {
+      viewerMaxSensitivity: "internal",
+    })) as { runId: string };
+    expect((await runRow(runId)).model).toBe("opus");
+    const noOpus = new MockClaudeProvider(reg.models.CLAUDE!, {
+      failures: [new ProviderError("MODEL_UNAVAILABLE", "Not on this plan")],
+    });
+    expect(
+      await executeRun(runId, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: noOpus,
+      }),
+    ).toBe("failed");
+    expect(await settings()).toMatchObject({ premiumAvailable: false, healthState: "available" });
+    const std = await preview(db, e, await newTask("Standard after Opus"), {
+      viewerMaxSensitivity: "internal",
+    });
+    expect(std.route).toMatchObject({ model: "sonnet", blockedReason: null });
+    await resetHealth();
   });
 });

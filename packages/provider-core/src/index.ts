@@ -2,6 +2,7 @@ export * from "./types";
 export * from "./pricing";
 export * from "./models";
 export * from "./claude";
+export * from "./claude-code";
 export * from "./mock-claude";
 export * from "./placeholders";
 export * from "./registry";

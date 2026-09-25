@@ -166,9 +166,9 @@ export function AiPolicyPanel({
                 label="Default model tier"
                 value={p.defaultModelTier}
                 options={[
-                  { value: "standard", label: "Standard (Claude Sonnet 5)" },
+                  { value: "standard", label: "Standard (Claude Sonnet)" },
                   { value: "auto", label: "Auto (premium only for high-complexity tasks)" },
-                  { value: "premium", label: "Premium (Claude Opus 5.5)" },
+                  { value: "premium", label: "Premium (Claude Opus, if your plan includes it)" },
                 ]}
                 onChange={(e) =>
                   setP({ ...p, defaultModelTier: e.target.value as typeof p.defaultModelTier })

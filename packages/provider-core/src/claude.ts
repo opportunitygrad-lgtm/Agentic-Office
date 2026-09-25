@@ -51,8 +51,12 @@ function retryAfterMs(headers: Headers | undefined): number | null {
  */
 export class ClaudeProvider implements AIProvider {
   readonly providerId = "CLAUDE" as const;
-  readonly displayName = "Claude";
+  readonly displayName = "Claude (Anthropic API)";
   readonly isMock = false;
+  /** Optional transport — only used when CLAUDE_TRANSPORT=anthropic_api is set deliberately. */
+  readonly transport = "anthropic_api" as const;
+  readonly authMode = "api_key" as const;
+  readonly billingMode = "api" as const;
   private readonly client: Anthropic | null;
   private readonly inflight = new Map<string, AbortController>();
 

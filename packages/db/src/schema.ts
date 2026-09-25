@@ -602,6 +602,16 @@ export const aiUsageRecords = pgTable(
     runId: uuid("run_id"),
     /** Price in force when the call ran (never recomputed). */
     priceSnapshot: jsonb("price_snapshot"),
+    /**
+     * Stage 05A: how the call was made and billed. `subscription` rows (Claude
+     * Code on the owner's plan) always have actual_cost 0 and never count as
+     * API spend; `api_equivalent_cost` is an analytical, NOT BILLED estimate.
+     */
+    transport: text("transport"),
+    billingMode: text("billing_mode").notNull().default("api"),
+    apiEquivalentCost: usd("api_equivalent_cost"),
+    /** Subscription rate-limit state reported with the call (status, type, reset). */
+    rateLimit: jsonb("rate_limit"),
     toolCost: usd("tool_cost").notNull().default(0),
     providerCost: usd("provider_cost").notNull().default(0),
     estimatedCost: usd("estimated_cost").notNull().default(0),
@@ -612,6 +622,11 @@ export const aiUsageRecords = pgTable(
     index("usage_occurred_idx").on(t.occurredAt),
     index("usage_company_idx").on(t.companyId, t.occurredAt),
     index("usage_provider_idx").on(t.provider, t.occurredAt),
+    // Subscription usage can never become API spend.
+    check(
+      "usage_billing_mode",
+      sql`${t.billingMode} in ('subscription','api','none') and (${t.billingMode} <> 'subscription' or (${t.actualCost} = 0 and ${t.providerCost} = 0))`,
+    ),
   ],
 );
 
@@ -1458,6 +1473,12 @@ export const aiProviderSettings = pgTable("ai_provider_settings", {
   lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
   lastErrorCode: text("last_error_code"),
   consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  /** Stage 05A: premium model availability on the subscription (null = unknown). */
+  premiumAvailable: boolean("premium_available"),
+  /** Last subscription rate-limit state (status, type, resetsAt). */
+  rateLimit: jsonb("rate_limit"),
+  /** Claude Code CLI facts (version, auth method, plan) — never credentials. */
+  cliInfo: jsonb("cli_info"),
   updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
     onDelete: "set null",
   }),
@@ -1518,6 +1539,10 @@ export const agentRuns = pgTable(
     reservationStatus: text("reservation_status").notNull().default("none"),
     actualCost: usd("actual_cost"),
     priceSnapshot: jsonb("price_snapshot"),
+    /** Stage 05A transport/billing. Subscription runs keep actual_cost NULL (N/A). */
+    transport: text("transport").notNull().default("anthropic_api"),
+    billingMode: text("billing_mode").notNull().default("api"),
+    apiEquivalentCost: usd("api_equivalent_cost"),
     latencyMs: integer("latency_ms"),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
@@ -1551,6 +1576,10 @@ export const agentRuns = pgTable(
     check(
       "agent_runs_reservation",
       sql`${t.reservationStatus} in ('none','active','settled','released')`,
+    ),
+    check(
+      "agent_runs_billing_mode",
+      sql`${t.billingMode} in ('subscription','api','none') and (${t.billingMode} <> 'subscription' or (${t.actualCost} is null and ${t.reservedCost} = 0))`,
     ),
   ],
 );

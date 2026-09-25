@@ -1,5 +1,6 @@
 /**
- * MANUAL live Claude acceptance — `pnpm test:claude-live`.
+ * MANUAL live check of the OPTIONAL Anthropic API transport — `pnpm test:claude-live`.
+ * (The default Claude transport is Claude Code; see `pnpm test:claude-subscription-live`.)
  *
  * Never part of `pnpm test` / `pnpm test:e2e`. Refuses unless
  * ALLOW_LIVE_AI_TESTS=true AND an Anthropic credential is configured.
@@ -34,7 +35,10 @@ if (!process.env.ANTHROPIC_API_KEY?.trim() && !process.env.ANTHROPIC_AUTH_TOKEN?
 
 const handle = createDb(requireEnv("DATABASE_URL"));
 const db = handle.db;
-const registry = createProviderRegistry({ mode: "live" });
+const registry = createProviderRegistry({
+  mode: "live",
+  env: { ...process.env, CLAUDE_TRANSPORT: "anthropic_api" },
+});
 const env = { registry, timeoutMs: 120_000, historyLimit: 6 };
 const store = createRunStore(db, env, { publish: () => {} });
 

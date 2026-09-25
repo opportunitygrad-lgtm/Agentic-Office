@@ -43,6 +43,13 @@
       "when": 1790303064742,
       "tag": "0005_stage05_execution",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790311147744,
+      "tag": "0006_stage05a_subscription",
+      "breakpoints": true
     }
   ]
 }

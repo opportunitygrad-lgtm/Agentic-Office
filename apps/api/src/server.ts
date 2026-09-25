@@ -1,6 +1,10 @@
 import { Redis } from "ioredis";
 import { createDb, providerStatuses } from "@aibos/db";
-import { chatHistoryLimit, providerTimeoutMs } from "@aibos/execution-core";
+import {
+  chatHistoryLimit,
+  providerTimeoutMs,
+  subscriptionLimitsFromEnv,
+} from "@aibos/execution-core";
 import { createProviderRegistry } from "@aibos/provider-core";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
@@ -20,26 +24,30 @@ redis.on("error", () => {
   /* surfaced through /health; avoid crashing on transient Redis loss */
 });
 
-// Credentials are read from the server environment only; never sent to the browser.
+// Claude defaults to the owner's local Claude Code subscription (CLAUDE_TRANSPORT);
+// any optional API credential stays in the server environment, never the browser.
 const registry = createProviderRegistry();
 const bus = createRedisRunBus(config.REDIS_URL);
 const claudeHealth = async () => {
   const [claude] = (await providerStatuses(db.db, registry)).filter((p) => p.provider === "CLAUDE");
   const state = claude?.state ?? "not_configured";
+  // Setup still pending (not checked / not installed / login required) is
+  // "not configured", not an error.
   const status =
-    state === "not_configured"
+    state === "not_configured" || state === "not_installed" || state === "login_required"
       ? "not_configured"
       : state === "available"
         ? "ok"
         : state === "unavailable" || state === "auth_error"
           ? "down"
           : "degraded";
+  const label = claude?.transport === "claude_code_cli" ? "Claude Code" : "Claude API";
   return {
     status: status as "ok" | "degraded" | "down" | "not_configured",
     detail:
       state === "not_configured"
-        ? "Not configured"
-        : `${state.replace("_", " ")}${claude?.isMock ? " (mock)" : ""}`,
+        ? `${label}: not configured`
+        : `${label}: ${state.replace(/_/g, " ")}${claude?.isMock ? " (mock)" : ""}`,
   };
 };
 
@@ -47,7 +55,12 @@ const app = await buildApp({
   db,
   health: createHealthProbe(db, redis, { claude: claudeHealth }),
   execution: {
-    env: { registry, timeoutMs: providerTimeoutMs(), historyLimit: chatHistoryLimit() },
+    env: {
+      registry,
+      timeoutMs: providerTimeoutMs(),
+      historyLimit: chatHistoryLimit(),
+      subscriptionLimits: subscriptionLimitsFromEnv(),
+    },
     bus,
   },
   corsOrigins: config.API_CORS_ORIGINS,

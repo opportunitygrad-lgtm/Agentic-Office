@@ -21,7 +21,7 @@ export default async function ProvidersPage() {
       <PageHeader
         eyebrow="Settings"
         title="AI providers"
-        description="Provider connection, model policy and spend. Credentials are configured on the server and are never shown here."
+        description="Provider connection, model policy and usage. Claude runs through your own Claude Code sign-in (Pro subscription) on this machine — this app never asks for or stores Claude credentials."
         devData={mode === "mock"}
       />
       <ProviderSettings providers={providers} />

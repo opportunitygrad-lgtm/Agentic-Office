@@ -18,7 +18,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "auth:bootstrap": "tsx src/auth/bootstrap.ts",
-    "claude:live": "tsx src/live/claude-smoke.ts"
+    "claude:live": "tsx src/live/claude-smoke.ts",
+    "claude:subscription-live": "tsx src/live/claude-subscription-smoke.ts"
   },
   "dependencies": {
     "@aibos/access-core": "workspace:*",

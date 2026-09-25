@@ -220,7 +220,9 @@ export function TaskRunPanel({ taskId }: { taskId: string }) {
                   <div>
                     <dt className="text-fg-faint">Estimated cost</dt>
                     <dd className="num font-semibold" data-testid="estimated-cost">
-                      {formatUsd(p.route.estimatedCostUsd)}
+                      {p.route.billingMode === "subscription"
+                        ? "Included in subscription"
+                        : formatUsd(p.route.estimatedCostUsd)}
                     </dd>
                   </div>
                 </dl>
@@ -329,7 +331,11 @@ export function TaskRunPanel({ taskId }: { taskId: string }) {
                     </span>
                     <StatusPill tone={meta.tone} label={meta.label} />
                     <span className="num hidden text-fg-muted sm:block">
-                      {r.actualCostUsd !== null ? formatUsd(r.actualCostUsd) : "—"}
+                      {r.billingMode === "subscription"
+                        ? "Subscription"
+                        : r.actualCostUsd !== null
+                          ? formatUsd(r.actualCostUsd)
+                          : "—"}
                     </span>
                     <span className="num hidden text-fg-muted sm:block">
                       {ms !== null ? `${Math.round(ms / 1000)} sec` : "—"}

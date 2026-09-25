@@ -122,12 +122,12 @@ export function Sidebar({
         <div className="rounded-xl bg-surface-2 p-3">
           <div className="flex items-center justify-between">
             <span className="text-[12px] font-semibold">Stage 05 · AI execution</span>
-            <span className="font-mono text-[10px] text-fg-faint">v0.5</span>
+            <span className="font-mono text-[10px] text-fg-faint">v0.5a</span>
           </div>
           <ul className="mt-2 space-y-1 text-[11.5px] text-fg-muted">
             <li className="flex items-center gap-1.5">
-              <PlugZap className="size-3.5 text-fg-faint" aria-hidden="true" /> Claude only · no
-              external tools
+              <PlugZap className="size-3.5 text-fg-faint" aria-hidden="true" /> Claude Code
+              subscription · no external tools
             </li>
             {devData && (
               <li className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300">

@@ -269,6 +269,13 @@ export interface ProviderUsageDTO {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   averageCallUsd: number | null;
+  /** How the live provider is billed. "subscription" rows never count as spend. */
+  billingMode: "subscription" | "api" | "none";
+  /** Subscription runs today / this month (Claude Code). */
+  subscriptionRunsToday: number;
+  subscriptionRunsMonth: number;
+  /** NOT BILLED — analytical API-equivalent estimate for subscription runs this month. */
+  apiEquivalentMonthUsd: number;
   /** 14 daily spend points, oldest → newest. */
   trend: number[];
 }

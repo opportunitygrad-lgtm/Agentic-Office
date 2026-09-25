@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_EXECUTION_RESULT_JSON_SCHEMA } from "@aibos/shared";
 import {
+  CLAUDE_CODE_MODEL_DEFAULTS,
   CLAUDE_MODEL_DEFAULTS,
   ClaudeProvider,
   MockClaudeProvider,
@@ -229,7 +230,10 @@ describe("MockClaudeProvider", () => {
 
 describe("registry & configuration", () => {
   it("keeps OpenAI and Grok disconnected and never falls back silently", async () => {
-    const reg = createProviderRegistry({ env: {}, mode: "live" });
+    const reg = createProviderRegistry({
+      env: { CLAUDE_TRANSPORT: "anthropic_api" },
+      mode: "live",
+    });
     expect(reg.get("CLAUDE").available()).toBe(false);
     for (const p of ["OPENAI", "GROK"] as const) {
       expect(reg.get(p)).toBeInstanceOf(NotConnectedProvider);
@@ -257,7 +261,7 @@ describe("registry & configuration", () => {
       providerModeFromEnv({ AIBOS_AI_PROVIDER_MODE: "mock", NODE_ENV: "production" }),
     ).toThrow();
     expect(
-      createProviderRegistry({ env: { ANTHROPIC_API_KEY: "k" } })
+      createProviderRegistry({ env: { ANTHROPIC_API_KEY: "k", CLAUDE_TRANSPORT: "anthropic_api" } })
         .get("CLAUDE")
         .available(),
     ).toBe(true);
@@ -304,10 +308,38 @@ const baseRoute = (over: Partial<RouteInput> = {}): RouteInput => ({
     requiredCapabilities: ["research.general"],
   },
   providers: [
-    { provider: "CLAUDE", available: true, isMock: false, reasoning: true },
-    { provider: "OPENAI", available: false, isMock: false, reasoning: false },
-    { provider: "GROK", available: false, isMock: false, reasoning: false },
-    { provider: "LOCAL", available: true, isMock: false, reasoning: false },
+    {
+      provider: "CLAUDE",
+      available: true,
+      isMock: false,
+      reasoning: true,
+      transport: "anthropic_api",
+      billingMode: "api",
+    },
+    {
+      provider: "OPENAI",
+      available: false,
+      isMock: false,
+      reasoning: false,
+      transport: "none",
+      billingMode: "none",
+    },
+    {
+      provider: "GROK",
+      available: false,
+      isMock: false,
+      reasoning: false,
+      transport: "none",
+      billingMode: "none",
+    },
+    {
+      provider: "LOCAL",
+      available: true,
+      isMock: false,
+      reasoning: false,
+      transport: "local",
+      billingMode: "none",
+    },
   ],
   models: { CLAUDE: CLAUDE_MODEL_DEFAULTS },
   price: (_p, m) => (m === SONNET.model ? SONNET : m === OPUS.model ? OPUS : null),
@@ -369,6 +401,42 @@ describe("routeExecution", () => {
     ).toMatch(/no usable fallback/);
     const task = { ...baseRoute().task!, providerRequirement: "OPENAI" as const };
     expect(routeExecution(baseRoute({ task })).blockedReason).toMatch(/PROVIDER_NOT_CONFIGURED/);
+  });
+
+  it("routes subscription Claude without API spend; the price only feeds a NOT BILLED estimate", () => {
+    const providers = baseRoute().providers.map((p) =>
+      p.provider === "CLAUDE"
+        ? { ...p, transport: "claude_code_cli" as const, billingMode: "subscription" as const }
+        : p,
+    );
+    const models = { CLAUDE: CLAUDE_CODE_MODEL_DEFAULTS };
+    const r = routeExecution(baseRoute({ providers, models }));
+    expect(r).toMatchObject({
+      provider: "CLAUDE",
+      model: "sonnet",
+      transport: "claude_code_cli",
+      billingMode: "subscription",
+      estimatedCostUsd: 0,
+    });
+    expect(r.apiEquivalentUsd).toBeCloseTo((10_000 * 2 + 4_000 * 10) / 1e6);
+    // No price → still runs (subscription), just without an estimate.
+    expect(routeExecution(baseRoute({ providers, models, price: () => null }))).toMatchObject({
+      blockedReason: null,
+      apiEquivalentUsd: null,
+    });
+    // Login required is reported as the reason; no transport switch, no fallback.
+    const loggedOut = providers.map((p) =>
+      p.provider === "CLAUDE"
+        ? {
+            ...p,
+            available: false,
+            unavailableReason: "Claude Code login required — run: claude login",
+          }
+        : p,
+    );
+    const blocked = routeExecution(baseRoute({ providers: loggedOut, models }));
+    expect(blocked.provider).toBeNull();
+    expect(blocked.blockedReason).toMatch(/claude login/);
   });
 
   it("routes deterministic data work to LOCAL and requires a price for AI models", () => {

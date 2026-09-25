@@ -17,7 +17,7 @@ TASK ROUTER                      packages/agent-core   (RuleBasedTaskRouter)
 AGENT REGISTRY                   agents + agent_company_assignments + templates
   ↓
 AI PROVIDER ROUTER               packages/provider-core (ProviderRouter)
-  ├── Claude   ─┐  AIProvider interface — Claude live via the Anthropic SDK
+  ├── Claude   ─┐  AIProvider interface — Claude via local Claude Code (Pro subscription, default) or the optional Anthropic API
   ├── OpenAI    │  (Stage 05); OpenAI/Grok placeholders (PROVIDER_NOT_CONFIGURED);
   ├── Grok      │  Local deterministic
   └── Local    ─┘
@@ -33,22 +33,22 @@ AUDIT LOG                        audit_events (append-only)
 
 ## Repository layout
 
-| Path                        | Responsibility                                                                                                                                              |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`                  | Next.js 16 command centre. Server components fetch the API; `/api/*` is rewritten to the API so the browser is same-origin.                                 |
-| `apps/api`                  | Fastify 5 HTTP API (`/v1/*`, `/health`). Thin: validates with Zod, calls repositories, maps errors.                                                         |
-| `apps/worker`               | BullMQ workers: heartbeat, and (Stage 05) the `agent-runs` processor — the only place a provider is called; run recovery on start.                          |
-| `packages/shared`           | Enums (single source of truth for every status vocabulary), Zod schemas, API DTO types, formatting helpers. Browser-safe.                                   |
-| `packages/db`               | Drizzle schema, migrations, repositories (data-access layer returning DTOs), reference data sync, development seed.                                         |
-| `packages/agent-core`       | Agent template definitions, departments, task-routing contract + reference router.                                                                          |
-| `packages/provider-core`    | `AIProvider` contract, `ClaudeProvider` (Anthropic SDK), `MockClaudeProvider`, placeholders, registry, deterministic router, pricing.                       |
-| `packages/execution-core`   | Stage 05 run pipeline: provider message construction, output/retry/timeout policy, `executeRun` against a `RunStore`. No DB or SDK imports.                 |
-| `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                                                  |
-| `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                                                      |
-| `packages/context-core`     | Stage 03 Agent Context Engine: deterministic context-pack assembly, relevance, budgets, rule evaluation, retriever/ingestion contracts. Pure, browser-safe. |
-| `packages/delegation-core`  | Stage 04 delegation engine: deterministic `decideDelegation`, per-candidate checks, budget decisions, duplicate detection. Pure, browser-safe.              |
-| `packages/ui`               | Accessible UI primitives (buttons, status pills, progress, panels, sparkline, skeletons) and status-tone mapping.                                           |
-| `infrastructure`            | Docker Compose for PostgreSQL 16 and Redis 7 (development).                                                                                                 |
+| Path                        | Responsibility                                                                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`                  | Next.js 16 command centre. Server components fetch the API; `/api/*` is rewritten to the API so the browser is same-origin.                                                           |
+| `apps/api`                  | Fastify 5 HTTP API (`/v1/*`, `/health`). Thin: validates with Zod, calls repositories, maps errors.                                                                                   |
+| `apps/worker`               | BullMQ workers: heartbeat, and (Stage 05) the `agent-runs` processor — the only place a provider is called; run recovery on start.                                                    |
+| `packages/shared`           | Enums (single source of truth for every status vocabulary), Zod schemas, API DTO types, formatting helpers. Browser-safe.                                                             |
+| `packages/db`               | Drizzle schema, migrations, repositories (data-access layer returning DTOs), reference data sync, development seed.                                                                   |
+| `packages/agent-core`       | Agent template definitions, departments, task-routing contract + reference router.                                                                                                    |
+| `packages/provider-core`    | `AIProvider` contract, `ClaudeCodeProvider` (default: official `claude` CLI, subscription), optional `ClaudeProvider` (Anthropic SDK), mock, placeholders, registry, router, pricing. |
+| `packages/execution-core`   | Stage 05 run pipeline: provider message construction, output/retry/timeout policy, `executeRun` against a `RunStore`. No DB or SDK imports.                                           |
+| `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                                                                            |
+| `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                                                                                |
+| `packages/context-core`     | Stage 03 Agent Context Engine: deterministic context-pack assembly, relevance, budgets, rule evaluation, retriever/ingestion contracts. Pure, browser-safe.                           |
+| `packages/delegation-core`  | Stage 04 delegation engine: deterministic `decideDelegation`, per-candidate checks, budget decisions, duplicate detection. Pure, browser-safe.                                        |
+| `packages/ui`               | Accessible UI primitives (buttons, status pills, progress, panels, sparkline, skeletons) and status-tone mapping.                                                                     |
+| `infrastructure`            | Docker Compose for PostgreSQL 16 and Redis 7 (development).                                                                                                                           |
 
 ## Key decisions
 
@@ -328,10 +328,14 @@ Web (Run / Chat) → API: authorize, preview route, budget preflight, reserve,
                      compile instructions (Stage 04) + Context Pack (Stage 03,
                      capped to the starter's clearance) → provider messages
                      (system = authority, user = fenced data, cached prefix)
-                     → ClaudeProvider.stream (timeout, AbortSignal, ≤1 retry)
+                     → CLAUDE provider (transport from CLAUDE_TRANSPORT):
+                       ClaudeCodeProvider → spawn `claude -p` (no tools, no MCP,
+                       sanitised env, stdin prompt) → owner's Pro subscription
+                       | optional ClaudeProvider → Anthropic API
+                       (timeout, AbortSignal/child kill, ≤1 retry)
                      → save raw response → validate → result + usage ledger
                  → Redis `aibos:run:<id>` → API SSE `/runs/:id/stream` → UI
-Stop → API → `aibos:run-cancel` → worker aborts the request
+Stop → API → `aibos:run-cancel` → worker aborts the request / kills the Claude Code child
 ```
 
 - **Result storage:** each run keeps its own result/output/usage; reruns
@@ -340,3 +344,22 @@ Stop → API → `aibos:run-cancel` → worker aborts the request
   automatic multi-agent cascade and no external tools.
 - **Health:** the API health endpoint includes a Claude Provider row;
   `NOT_CONFIGURED` is informational, not an error.
+
+## Claude transport (Stage 05A)
+
+The router treats **CLAUDE** as one logical provider; configuration resolves
+its transport — `ClaudeCodeTransport` (default, `CLAUDE_TRANSPORT=claude_code`)
+or `AnthropicApiTransport` (only when deliberately configured). Nothing else
+in the application depends on the transport: runs, events, SSE and the UI are
+identical; only `transport` / `billingMode` metadata differs.
+
+```
+Browser dashboard → API → Queue (BullMQ) → Worker → Claude Code Bridge
+  → local `claude` binary → Claude Pro subscription (owner's own login)
+```
+
+Local-first: the worker runs on the Mac/user account where `claude login` was
+done. A cloud deployment would need its own Claude Code login (not provided);
+a cloud → local secure worker bridge is a possible later design, not built.
+The Business OS never implements Claude authentication. See
+[AI_EXECUTION.md](AI_EXECUTION.md).

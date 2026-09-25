@@ -107,6 +107,26 @@ export const RUN_PHASE_LABELS: Partial<Record<RunEventType, string>> = {
   RUN_NEEDS_REVIEW: "Needs review",
 };
 
+/**
+ * How a logical provider is reached. CLAUDE defaults to the owner's local,
+ * subscription-authenticated Claude Code CLI; the Anthropic API transport is
+ * optional and only used when deliberately configured (CLAUDE_TRANSPORT).
+ */
+export const PROVIDER_TRANSPORTS = ["claude_code_cli", "anthropic_api", "local", "none"] as const;
+export type ProviderTransport = (typeof PROVIDER_TRANSPORTS)[number];
+export const TRANSPORT_LABELS: Record<ProviderTransport, string> = {
+  claude_code_cli: "Local Claude Code",
+  anthropic_api: "Anthropic API",
+  local: "Local logic",
+  none: "Not connected",
+};
+export const AUTH_MODES = ["subscription_login", "api_key", "none"] as const;
+export type AuthMode = (typeof AUTH_MODES)[number];
+/** SUBSCRIPTION usage is included in the owner's plan and never counts as API spend. */
+export const BILLING_MODES = ["subscription", "api", "none"] as const;
+export type BillingMode = (typeof BILLING_MODES)[number];
+export const API_EQUIVALENT_LABEL = "NOT BILLED — ESTIMATED API EQUIVALENT";
+
 export const PROVIDER_HEALTH_STATES = [
   "not_configured",
   "available",
@@ -114,6 +134,11 @@ export const PROVIDER_HEALTH_STATES = [
   "rate_limited",
   "auth_error",
   "unavailable",
+  // Claude Code subscription transport (Stage 05A)
+  "not_installed",
+  "login_required",
+  "login_expired",
+  "misconfigured",
 ] as const;
 export type ProviderHealthState = (typeof PROVIDER_HEALTH_STATES)[number];
 
@@ -134,6 +159,14 @@ export const PROVIDER_ERROR_CODES = [
   "OUTPUT_TRUNCATED",
   "INVALID_OUTPUT",
   "BUDGET_BLOCKED",
+  // Claude Code subscription transport (Stage 05A)
+  "NOT_INSTALLED",
+  "LOGIN_REQUIRED",
+  "LOGIN_EXPIRED",
+  "SUBSCRIPTION_LIMIT_REACHED",
+  "MODEL_UNAVAILABLE",
+  "MISCONFIGURED",
+  "API_BILLING_REFUSED",
   "UNKNOWN",
 ] as const;
 export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
@@ -263,6 +296,10 @@ export interface RouteDecisionDTO {
   approvalRequired: boolean;
   blockedReason: string | null;
   isMock: boolean;
+  transport: ProviderTransport;
+  billingMode: BillingMode;
+  /** Subscription runs: analytical API-equivalent estimate, never real spend. */
+  apiEquivalentUsd: number | null;
 }
 
 export interface BudgetCheckDTO {
@@ -273,7 +310,13 @@ export interface BudgetCheckDTO {
     | "company_daily"
     | "company_monthly"
     | "provider_daily"
-    | "global_daily";
+    | "global_daily"
+    // Subscription (Claude Code) operational limits
+    | "subscription_task_runs"
+    | "subscription_agent_daily_runs"
+    | "subscription_input_size";
+  /** Unit of limit/spent/remaining (defaults to USD for API-billed runs). */
+  unit?: "usd" | "runs" | "tokens";
   limitUsd: number | null;
   spentUsd: number;
   reservedUsd: number;
@@ -347,7 +390,11 @@ export interface AgentRunDTO {
   result: AgentExecutionResult | null;
   usage: AgentRunUsageDTO | null;
   estimatedCostUsd: number;
+  /** Real API spend; null for subscription runs (N/A — included in the plan). */
   actualCostUsd: number | null;
+  transport: ProviderTransport;
+  billingMode: BillingMode;
+  apiEquivalentUsd: number | null;
   latencyMs: number | null;
   stopReason: string | null;
   retryCount: number;
@@ -385,6 +432,21 @@ export interface ProviderStatusDTO {
   isMock: boolean;
   state: ProviderHealthState;
   detail: string | null;
+  transport: ProviderTransport;
+  authMode: AuthMode;
+  billingMode: BillingMode;
+  /** Claude Code CLI facts from `claude --version` / `claude auth status` (never credentials). */
+  cli: {
+    binary: string;
+    version: string | null;
+    authMethod: string | null;
+    subscriptionType: string | null;
+    maxConcurrency: number;
+  } | null;
+  /** null = not yet known (no premium run attempted). */
+  premiumAvailable: boolean | null;
+  rateLimit: { status: string; resetsAt: string | null; type: string | null } | null;
+  runsToday: number;
   enabled: boolean;
   standardModel: string | null;
   premiumModel: string | null;

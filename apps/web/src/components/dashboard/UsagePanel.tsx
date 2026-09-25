@@ -1,4 +1,9 @@
-import { PROVIDER_LABELS, formatUsd, type UsageSummaryDTO } from "@aibos/shared";
+import {
+  API_EQUIVALENT_LABEL,
+  PROVIDER_LABELS,
+  formatUsd,
+  type UsageSummaryDTO,
+} from "@aibos/shared";
 import { MockBadge, Panel, ProgressRing, Sparkline, cn } from "@aibos/ui";
 import { pct } from "@/lib/format";
 
@@ -138,6 +143,47 @@ export function UsagePanel({ usage }: { usage: UsageSummaryDTO }) {
       {(() => {
         const c = usage.providers.find((p) => p.provider === "CLAUDE");
         if (!c) return null;
+        if (c.billingMode === "subscription")
+          return (
+            <dl
+              className="grid grid-cols-3 gap-2 rounded-xl border border-line bg-surface-2/40 p-3 text-[11.5px]"
+              data-testid="claude-usage"
+            >
+              <p className="col-span-3 font-semibold">CLAUDE · Subscription (Claude Code)</p>
+              <div>
+                <dt className="text-fg-faint">Runs today</dt>
+                <dd className="num font-semibold">{c.subscriptionRunsToday}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Runs this month</dt>
+                <dd className="num font-semibold">{c.subscriptionRunsMonth}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Input / output (month)</dt>
+                <dd className="num font-semibold">
+                  {c.inputTokens.toLocaleString()} / {c.outputTokens.toLocaleString()}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Actual API cost</dt>
+                <dd className="font-semibold">N/A — included</dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-fg-faint">API equivalent (month)</dt>
+                <dd className="num font-semibold">
+                  ~{formatUsd(c.apiEquivalentMonthUsd)}{" "}
+                  <span className="text-[10.5px] font-medium text-fg-faint">
+                    {API_EQUIVALENT_LABEL}
+                  </span>
+                </dd>
+              </div>
+              <p className="col-span-3 text-fg-faint">
+                Claude runs use the owner&apos;s Pro subscription through local Claude Code — they
+                are never counted as spend. Real API spend today across providers:{" "}
+                {formatUsd(usage.liveTodayUsd)}.
+              </p>
+            </dl>
+          );
         return (
           <dl
             className="grid grid-cols-3 gap-2 rounded-xl border border-line bg-surface-2/40 p-3 text-[11.5px]"
@@ -213,10 +259,17 @@ export function UsagePanel({ usage }: { usage: UsageSummaryDTO }) {
                       "rounded px-1 text-[10px] font-medium",
                       p.isMock
                         ? "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
-                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300",
+                        : p.billingMode === "subscription"
+                          ? "bg-sky-100 text-sky-800 dark:bg-sky-500/15 dark:text-sky-300"
+                          : "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300",
                     )}
+                    title={
+                      p.billingMode === "subscription" && !p.isMock
+                        ? "Claude subscription via Claude Code — not API spend"
+                        : undefined
+                    }
                   >
-                    {p.isMock ? "MOCK" : "REAL"}
+                    {p.isMock ? "MOCK" : p.billingMode === "subscription" ? "SUB" : "REAL"}
                   </span>
                 </span>
               </th>

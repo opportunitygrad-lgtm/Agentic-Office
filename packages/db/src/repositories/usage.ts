@@ -1,5 +1,11 @@
 import { and, eq, gte, sql, type SQL } from "drizzle-orm";
-import { PROVIDER_TYPES, type ProviderType, type UsageSummaryDTO } from "@aibos/shared";
+import { claudeTransportFromEnv } from "@aibos/provider-core";
+import {
+  PROVIDER_TYPES,
+  type BillingMode,
+  type ProviderType,
+  type UsageSummaryDTO,
+} from "@aibos/shared";
 import type { Database } from "../client";
 import { aiUsageRecords, companies } from "../schema";
 import {
@@ -13,9 +19,21 @@ import {
 
 const TREND_DAYS = 14;
 
+/** How each provider is billed right now (CLAUDE follows CLAUDE_TRANSPORT). */
+function currentBilling(): Record<ProviderType, BillingMode> {
+  return {
+    CLAUDE: claudeTransportFromEnv() === "anthropic_api" ? "api" : "subscription",
+    OPENAI: "none",
+    GROK: "none",
+    LOCAL: "none",
+  };
+}
+
 /**
  * Aggregates the cost ledger. Day/month boundaries are UTC until per-company
- * timezone accounting arrives with the Cost Governor (Stage 11).
+ * timezone accounting arrives with the Cost Governor (Stage 11). Only
+ * API-billed usage is money spent: Claude subscription runs are counted as
+ * runs, with a separate NOT BILLED API-equivalent estimate.
  */
 export async function usageSummary(
   db: Database,
@@ -38,8 +56,12 @@ export async function usageSummary(
       .select({
         provider: aiUsageRecords.provider,
         live: sql<boolean>`${aiUsageRecords.origin} = 'live'`,
-        today: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)}), 0)::float8`,
-        month: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
+        today: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)} and ${aiUsageRecords.billingMode} <> 'subscription'), 0)::float8`,
+        month: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)} and ${aiUsageRecords.billingMode} <> 'subscription'), 0)::float8`,
+        apiCalls: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)} and ${aiUsageRecords.billingMode} <> 'subscription')::int`,
+        subToday: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)} and ${aiUsageRecords.billingMode} = 'subscription')::int`,
+        subMonth: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)} and ${aiUsageRecords.billingMode} = 'subscription')::int`,
+        apiEquivalent: sql<number>`coalesce(sum(${aiUsageRecords.apiEquivalentCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)} and ${aiUsageRecords.billingMode} = 'subscription'), 0)::float8`,
         calls: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)})::int`,
         callsToday: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)})::int`,
         input: sql<number>`coalesce(sum(${aiUsageRecords.inputTokens}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
@@ -55,7 +77,7 @@ export async function usageSummary(
         provider: aiUsageRecords.provider,
         day: sql<string>`to_char(date_trunc('day', ${aiUsageRecords.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
         live: sql<boolean>`${aiUsageRecords.origin} = 'live'`,
-        total: sql<number>`sum(${aiUsageRecords.actualCost})::float8`,
+        total: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.billingMode} <> 'subscription'), 0)::float8`,
       })
       .from(aiUsageRecords)
       .where(and(...scope, gte(aiUsageRecords.occurredAt, trendStart)))
@@ -90,6 +112,7 @@ export async function usageSummary(
     if (keep(d.provider, d.live)) trendMap.set(`${d.provider}|${d.day}`, d.total);
 
   const round = (n: number) => Math.round(n * 100) / 100;
+  const billing = currentBilling();
   const providers = PROVIDER_TYPES.map((p: ProviderType) => {
     const r = rows.find((x) => x.provider === p && keep(p, x.live));
     return {
@@ -103,7 +126,11 @@ export async function usageSummary(
       outputTokens: r?.output ?? 0,
       cacheReadTokens: r?.cacheRead ?? 0,
       cacheCreationTokens: r?.cacheWrite ?? 0,
-      averageCallUsd: r && r.calls ? Math.round((r.month / r.calls) * 10_000) / 10_000 : null,
+      averageCallUsd: r && r.apiCalls ? Math.round((r.month / r.apiCalls) * 10_000) / 10_000 : null,
+      billingMode: billing[p],
+      subscriptionRunsToday: r?.subToday ?? 0,
+      subscriptionRunsMonth: r?.subMonth ?? 0,
+      apiEquivalentMonthUsd: round(r?.apiEquivalent ?? 0),
       trend: days.map((d) => round(trendMap.get(`${p}|${d}`) ?? 0)),
     };
   });

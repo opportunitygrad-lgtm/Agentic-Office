@@ -10,6 +10,8 @@ import { useRunStream } from "../execution/useRunStream";
 import { hasPermission, useMe } from "../shell/SessionContext";
 
 const MODEL_LABEL: Record<string, string> = {
+  sonnet: "Claude Sonnet",
+  opus: "Claude Opus",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-opus-5-5": "Claude Opus 5.5",
 };

@@ -4,7 +4,7 @@ test.describe.configure({ mode: "serial" });
 
 /**
  * Stage 05 execution flows. Deterministic: runs ONLY against a stack started
- * with AIBOS_AI_PROVIDER_MODE=mock (the worker uses MockClaudeProvider), so
+ * with AIBOS_AI_PROVIDER_MODE=mock AIBOS_MOCK_CHUNK_DELAY_MS=150 (the worker uses MockClaudeProvider), so
  * `pnpm test:e2e` never consumes Claude credit. Live checks live in
  * `pnpm test:claude-live` behind ALLOW_LIVE_AI_TESTS=true.
  */
@@ -79,7 +79,9 @@ test("task run: preview → run in worker → live timeline → result → histo
   const { taskId } = await newAssignedTask(page, `E2E brief ${Date.now()}`);
   await page.goto(`/tasks/item/${taskId}`);
   const preview = page.getByTestId("provider-preview");
-  await expect(preview).toContainText("Claude Sonnet 5");
+  await expect(preview).toContainText("Claude Sonnet");
+  // Default transport: the owner's Claude Code subscription — no API spend.
+  await expect(page.getByTestId("estimated-cost")).toHaveText("Included in subscription");
   await expect(preview).toContainText(/medium/i);
   await page.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.getByTestId("live-run-panel")).toBeVisible();
@@ -105,7 +107,7 @@ test("agent chat: streamed reply with model indicator; company shown", async ({ 
   await page.getByLabel("Message", { exact: true }).fill("What is your current responsibility?");
   await page.getByRole("button", { name: "Send" }).click();
   const messages = page.getByTestId("chat-messages");
-  await expect(messages).toContainText("Claude Sonnet 5", { timeout: 60_000 });
+  await expect(messages).toContainText("Claude Sonnet", { timeout: 60_000 });
   await expect(messages).toContainText("What is your current responsibility?");
 });
 
@@ -115,7 +117,10 @@ test("provider settings: status visible, test connection limited to platform rol
   await signIn(page, "ept.manager@aibos.example");
   await page.goto("/settings/providers");
   await expect(page.getByTestId("provider-CLAUDE")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Test Claude connection" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Test Claude/ })).toHaveCount(0);
+  // Claude Code card: subscription login, never an API-key or password field.
+  await expect(page.getByTestId("provider-CLAUDE")).toContainText("Included subscription usage");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
   const html = await page.content();
   expect(html).not.toMatch(/sk-ant|ANTHROPIC_API_KEY=/);
   expect(
@@ -150,6 +155,8 @@ test("stop run: cancellation reaches the worker and the run ends CANCELLED", asy
   await page.getByRole("button", { name: "Run", exact: true }).click();
   const panel = page.getByTestId("live-run-panel");
   await expect(panel).toBeVisible();
+  // Stop mid-stream so the cancel must reach the worker's in-flight provider call.
+  await expect(page.getByTestId("run-output")).not.toBeEmpty({ timeout: 30_000 });
   await page.getByRole("button", { name: /^Stop/ }).first().click();
   await expect(page.getByTestId("run-history")).toContainText(/Stopped|Cancelled/i, {
     timeout: 60_000,

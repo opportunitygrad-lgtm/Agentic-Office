@@ -1,8 +1,11 @@
 import type {
+  AuthMode,
+  BillingMode,
   EffortLevel,
   ProviderCapability,
   ProviderErrorCode,
   ProviderHealthState,
+  ProviderTransport,
   ProviderType,
 } from "@aibos/shared";
 
@@ -58,6 +61,25 @@ export interface ProviderResult {
   requestId: string | null;
   usage: ProviderUsage;
   latencyMs: number;
+  /** Subscription rate-limit state reported during the call (Claude Code). */
+  rateLimit?: RateLimitState | null;
+}
+
+/** Claude subscription usage-limit state (from Claude Code `rate_limit_event`). */
+export interface RateLimitState {
+  status: "allowed" | "allowed_warning" | "rejected";
+  type: string | null;
+  resetsAt: string | null;
+}
+
+/** Facts from the official CLI (`--version`, `auth status`). Never credentials. */
+export interface CliInfo {
+  binary: string;
+  version: string | null;
+  loggedIn: boolean | null;
+  authMethod: string | null;
+  apiProvider: string | null;
+  subscriptionType: string | null;
 }
 
 export interface StreamHandlers {
@@ -72,6 +94,8 @@ export interface ProviderHealthResult {
   state: ProviderHealthState;
   checkedAt: Date;
   detail: string | null;
+  cli?: CliInfo | null;
+  rateLimit?: RateLimitState | null;
 }
 
 export interface ModelPrice {
@@ -99,6 +123,10 @@ export interface AIProvider {
   readonly displayName: string;
   /** True for deterministic development/test providers (clearly labelled in the UI). */
   readonly isMock: boolean;
+  /** How the logical provider is reached and billed (the rest of the OS stays transport-neutral). */
+  readonly transport: ProviderTransport;
+  readonly authMode: AuthMode;
+  readonly billingMode: BillingMode;
   /** Credentials/configuration present — never makes a network call. */
   available(): boolean;
   /**

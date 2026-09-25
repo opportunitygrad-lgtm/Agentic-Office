@@ -1,13 +1,16 @@
-import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { evaluateBudget, type BudgetLimit } from "@aibos/delegation-core";
 import {
   buildChatInput,
   buildTaskInput,
+  DEFAULT_SUBSCRIPTION_LIMITS,
   maxOutputTokensFor,
   recentHistory,
   type ProviderInput,
+  type SubscriptionLimits,
 } from "@aibos/execution-core";
 import {
+  priceModelFor,
   routeExecution,
   type ModelPrice,
   type ProviderModelConfig,
@@ -21,6 +24,7 @@ import {
   startTaskRunSchema,
   type AgentCapability,
   type AgentContextPack,
+  type BillingMode,
   type BudgetCheckDTO,
   type BudgetDecision,
   type CompiledAgentInstructionPack,
@@ -65,6 +69,8 @@ export interface ExecutionEnv {
   registry: ProviderRegistry;
   timeoutMs: number;
   historyLimit: number;
+  /** Operational limits for subscription-billed runs (defaults when omitted). */
+  subscriptionLimits?: SubscriptionLimits;
 }
 
 const BLOCKING_AGENT_STATES = ["paused", "offline", "failed", "expired", "terminated"];
@@ -127,17 +133,53 @@ export async function effectiveModels(
   return out;
 }
 
+const UNAVAILABLE_REASON: Record<string, string> = {
+  not_installed: "Claude Code is not installed on this machine",
+  login_required: "Claude Code login required — open Terminal and run: claude login",
+  login_expired: "Claude login expired — run in Terminal: claude login",
+  misconfigured: "Claude Code is misconfigured — see Settings → AI Providers",
+  rate_limited: "Claude Pro usage limit reached — no API fallback is used",
+  auth_error: "Provider authentication failed",
+  unavailable: "Provider unavailable",
+};
+
 async function providerAvailability(db: Db, registry: ProviderRegistry) {
   const settings = await db.select().from(aiProviderSettings);
   return PROVIDER_TYPES.map((provider) => {
     const p = registry.get(provider);
     const s = settings.find((x) => x.provider === provider);
-    const blockedState = s && ["auth_error", "unavailable"].includes(s.healthState);
+    const state = s?.healthState ?? null;
+    const limit = s?.rateLimit as { resetsAt?: string | null } | null | undefined;
+    const limited =
+      state === "rate_limited" && (!limit?.resetsAt || Date.parse(limit.resetsAt) > Date.now());
+    const blockedState =
+      !!state &&
+      ([
+        "auth_error",
+        "unavailable",
+        "not_installed",
+        "login_required",
+        "login_expired",
+        "misconfigured",
+      ].includes(state) ||
+        limited);
+    const reason = !p.available()
+      ? p.transport === "claude_code_cli"
+        ? "Claude Code is not ready — see Settings → AI Providers"
+        : `${provider} is not connected`
+      : !(s?.enabled ?? true)
+        ? `${provider} is disabled in Settings → AI Providers`
+        : blockedState
+          ? (UNAVAILABLE_REASON[state!] ?? `${provider} is unavailable`)
+          : null;
     return {
       provider,
       available: p.available() && (s?.enabled ?? true) && !blockedState,
       isMock: p.isMock,
       reasoning: p.capabilities().includes("reasoning"),
+      transport: p.transport,
+      billingMode: p.billingMode,
+      unavailableReason: reason,
     };
   });
 }
@@ -251,8 +293,13 @@ async function routeFor(
   ]);
   const prices = new Map<string, ModelPrice | null>();
   for (const [p, m] of Object.entries(models) as [ProviderType, ProviderModelConfig][])
-    for (const model of [m.standardModel, m.premiumModel])
+    for (const model of [m.standardModel, m.premiumModel]) {
       prices.set(`${p}:${model}`, await currentPrice(db, p, model));
+      // Subscription aliases (sonnet/opus) are compared against their API price
+      // for the NOT BILLED estimate only.
+      const priced = priceModelFor(model);
+      if (priced !== model) prices.set(`${p}:${priced}`, await currentPrice(db, p, priced));
+    }
   return routeExecution({
     company: policy,
     agent: {
@@ -489,11 +536,21 @@ export async function budgetPreflight(
     task: Task | null;
     provider: ProviderType;
     estimateUsd: number;
+    /** Subscription runs use operational limits instead of dollar budgets. */
+    billingMode?: BillingMode;
+    inputTokens?: number;
+    subscription?: SubscriptionLimits;
     now?: Date;
   },
 ): Promise<{ decision: BudgetDecision; checks: BudgetCheckDTO[]; reasons: string[] }> {
   const now = args.now ?? new Date();
   const day = startOfUtcDay(now);
+  if (args.billingMode === "subscription")
+    return subscriptionPreflight(
+      db,
+      { ...args, day },
+      args.subscription ?? DEFAULT_SUBSCRIPTION_LIMITS,
+    );
   const month = startOfUtcMonth(now);
   const policy = await getWorkforcePolicy(db);
   const [settings] = await db
@@ -567,6 +624,9 @@ export async function budgetPreflight(
     company_monthly: "the company's remaining monthly AI budget",
     provider_daily: "the provider's remaining daily budget",
     global_daily: "the platform's remaining daily AI budget",
+    subscription_task_runs: "the task's subscription runs today",
+    subscription_agent_daily_runs: "the agent's subscription runs today",
+    subscription_input_size: "the subscription request-size limit",
   };
   const limits: BudgetLimit[] = checks.map((c) => ({
     label: LABEL[c.scope],
@@ -583,6 +643,88 @@ export async function budgetPreflight(
       `Estimate $${args.estimateUsd} within task, agent, company, provider and platform budgets`,
     );
   return { decision, checks, reasons };
+}
+
+/**
+ * Subscription (Claude Code) preflight: bounded by runs per task and per agent
+ * per day and by request size — never by dollars, never "requires approval",
+ * and it never switches the run to API billing.
+ */
+async function subscriptionPreflight(
+  db: Db,
+  args: { agent: Agent; task: Task | null; inputTokens?: number; day: Date },
+  limits: SubscriptionLimits,
+): Promise<{ decision: BudgetDecision; checks: BudgetCheckDTO[]; reasons: string[] }> {
+  const count = async (where: SQL) => {
+    const [r] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(agentRuns)
+      .where(
+        and(
+          where,
+          eq(agentRuns.billingMode, "subscription"),
+          gte(agentRuns.createdAt, args.day),
+          sql`${agentRuns.status} <> 'cancelled' or ${agentRuns.providerCallStartedAt} is not null`,
+        ),
+      );
+    return r?.n ?? 0;
+  };
+  const checks: BudgetCheckDTO[] = [];
+  const reasons: string[] = [];
+  const push = (
+    scope: BudgetCheckDTO["scope"],
+    unit: "runs" | "tokens",
+    limit: number,
+    used: number,
+    next: number,
+    why: string,
+  ) => {
+    const passed = used + next <= limit;
+    checks.push({
+      scope,
+      unit,
+      limitUsd: limit,
+      spentUsd: used,
+      reservedUsd: 0,
+      remainingUsd: Math.max(0, limit - used),
+      passed,
+    });
+    if (!passed) reasons.push(why);
+  };
+  if (args.task)
+    push(
+      "subscription_task_runs",
+      "runs",
+      limits.maxRunsPerTaskPerDay,
+      await count(eq(agentRuns.taskId, args.task.id)),
+      1,
+      `This task reached its limit of ${limits.maxRunsPerTaskPerDay} Claude subscription runs today`,
+    );
+  push(
+    "subscription_agent_daily_runs",
+    "runs",
+    limits.maxRunsPerAgentPerDay,
+    await count(eq(agentRuns.agentId, args.agent.id)),
+    1,
+    `${args.agent.name} reached its limit of ${limits.maxRunsPerAgentPerDay} Claude subscription runs today`,
+  );
+  push(
+    "subscription_input_size",
+    "tokens",
+    limits.maxInputTokens,
+    0,
+    args.inputTokens ?? 0,
+    `The request (~${args.inputTokens ?? 0} tokens) exceeds the ${limits.maxInputTokens}-token limit for subscription runs`,
+  );
+  if (!reasons.length)
+    reasons.push(
+      "Within Claude subscription limits (runs per task/agent, request size) — no API spend",
+    );
+  return {
+    decision: reasons.length && checks.some((c) => !c.passed) ? "blocked" : "allowed",
+    checks,
+    reasons,
+  };
 }
 
 /** An approved (≤24h old) or pending approval for running this task. */
@@ -667,6 +809,9 @@ export async function previewTaskRun(
         task: plan.task,
         provider: plan.route.provider,
         estimateUsd: plan.route.estimatedCostUsd,
+        billingMode: plan.route.billingMode,
+        inputTokens: plan.route.estimatedInputTokens,
+        subscription: env.subscriptionLimits,
       })
     : empty;
   const { approved, pending } = await runApproval(db, taskId);
@@ -720,6 +865,9 @@ function routeBlocked(reason: string): RouteDecisionDTO {
     approvalRequired: false,
     blockedReason: reason,
     isMock: false,
+    transport: "none",
+    billingMode: "none",
+    apiEquivalentUsd: null,
   };
 }
 
@@ -762,7 +910,11 @@ async function insertRun(
   },
 ): Promise<string> {
   const route = plan.route;
-  const price = await currentPrice(tx, route.provider!, route.model!);
+  const price = await currentPrice(
+    tx,
+    route.provider!,
+    route.billingMode === "subscription" ? priceModelFor(route.model!) : route.model!,
+  );
   const [{ n }] = (await tx
     .select({ n: sql<number>`count(*)::int` })
     .from(agentRuns)
@@ -798,9 +950,18 @@ async function insertRun(
       instructionVersion: plan.instructions.version,
       contextSummary: plan.contextSummary,
       estimatedCost: route.estimatedCostUsd,
-      reservedCost: route.estimatedCostUsd,
-      reservationStatus: "active",
+      // Subscription runs reserve no money (they are never API-billed).
+      reservedCost: route.billingMode === "subscription" ? 0 : route.estimatedCostUsd,
+      reservationStatus: route.billingMode === "subscription" ? "none" : "active",
       priceSnapshot: price,
+      transport: route.transport,
+      billingMode:
+        route.billingMode === "subscription"
+          ? "subscription"
+          : route.billingMode === "none"
+            ? "none"
+            : "api",
+      apiEquivalentCost: route.apiEquivalentUsd,
     })
     .returning({ id: agentRuns.id });
   const runId = run!.id;
@@ -895,6 +1056,9 @@ export async function startTaskRun(
         task: plan.task,
         provider: plan.route.provider!,
         estimateUsd: plan.route.estimatedCostUsd,
+        billingMode: plan.route.billingMode,
+        inputTokens: plan.route.estimatedInputTokens,
+        subscription: env.subscriptionLimits,
       });
       const audit = {
         ...actorAuditFields(actor),
@@ -1038,6 +1202,9 @@ export async function startChatRun(
         task: null,
         provider: plan.route.provider!,
         estimateUsd: plan.route.estimatedCostUsd,
+        billingMode: plan.route.billingMode,
+        inputTokens: plan.route.estimatedInputTokens,
+        subscription: env.subscriptionLimits,
       });
       if (budget.decision !== "allowed") {
         await recordAuditEvent(tx, {

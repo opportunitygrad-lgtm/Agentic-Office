@@ -86,7 +86,11 @@ describe("providers", () => {
       execution: {
         env: {
           ...env,
-          registry: createProviderRegistry({ mode: "live", env: { ANTHROPIC_API_KEY: SECRET } }),
+          // Optional API transport, deliberately configured.
+          registry: createProviderRegistry({
+            mode: "live",
+            env: { ANTHROPIC_API_KEY: SECRET, CLAUDE_TRANSPORT: "anthropic_api" },
+          }),
         },
         bus,
       },
@@ -113,6 +117,58 @@ describe("providers", () => {
     expect(logs.join("")).not.toContain(SECRET);
   });
 
+  it("defaults to Claude Code subscription mode: no API key needed or used, CLI-only checks", async () => {
+    const fake = new URL(
+      "../../../packages/provider-core/test/fixtures/fake-claude.mjs",
+      import.meta.url,
+    ).pathname;
+    const sub = await buildApp({
+      db: handle,
+      health: healthStub,
+      execution: {
+        env: {
+          ...env,
+          registry: createProviderRegistry({
+            mode: "live",
+            // An API key in the server env must neither be required nor used.
+            env: { ...process.env, ANTHROPIC_API_KEY: SECRET, CLAUDE_CODE_BINARY: fake },
+          }),
+        },
+        bus,
+      },
+    });
+    const cookie = await loginCookie(sub, "owner@aibos.example");
+    const list = await sub.inject({ method: "GET", url: "/v1/providers", headers: { cookie } });
+    const claude = list
+      .json<{ data: ProviderStatusDTO[] }>()
+      .data.find((p) => p.provider === "CLAUDE")!;
+    expect(claude).toMatchObject({
+      transport: "claude_code_cli",
+      authMode: "subscription_login",
+      billingMode: "subscription",
+      standardModel: "sonnet",
+      premiumModel: "opus",
+    });
+    expect(list.body).not.toContain(SECRET);
+    const test = await sub.inject({
+      method: "POST",
+      url: "/v1/providers/CLAUDE/test",
+      headers: { cookie, origin: "http://localhost:3000" },
+    });
+    expect(test.json<{ data: { state: string } }>().data.state).toBe("available");
+    const after = (await sub.inject({ method: "GET", url: "/v1/providers", headers: { cookie } }))
+      .json<{ data: ProviderStatusDTO[] }>()
+      .data.find((p) => p.provider === "CLAUDE")!;
+    expect(after).toMatchObject({ state: "available", connected: true });
+    expect(after.cli).toMatchObject({ version: "9.9.9", maxConcurrency: 1 });
+    expect(JSON.stringify(after)).not.toContain(SECRET);
+    await sub.close();
+    await handle.db
+      .update(schema.aiProviderSettings)
+      .set({ healthState: "available", cliInfo: null })
+      .where(eq(schema.aiProviderSettings.provider, "CLAUDE"));
+  });
+
   it("shows OpenAI/Grok as not connected and restricts test/settings to platform roles", async () => {
     const list = (await get("ept.manager", "/v1/providers")).json<{ data: ProviderStatusDTO[] }>()
       .data;
@@ -131,13 +187,15 @@ describe("providers", () => {
         })
       ).statusCode,
     ).toBe(403);
+    const tested = () =>
+      handle.db
+        .select()
+        .from(schema.auditEvents)
+        .where(eq(schema.auditEvents.action, "claude.connection_tested"));
+    const before = (await tested()).length;
     const test = await post("owner", "/v1/providers/CLAUDE/test");
     expect(test.json<{ data: { state: string } }>().data.state).toBe("available");
-    const audit = await handle.db
-      .select()
-      .from(schema.auditEvents)
-      .where(eq(schema.auditEvents.action, "claude.connection_tested"));
-    expect(audit).toHaveLength(1);
+    expect(await tested()).toHaveLength(before + 1);
     for (let i = 0; i < 4; i++) await post("owner", "/v1/providers/CLAUDE/test");
     expect((await post("owner", "/v1/providers/CLAUDE/test")).statusCode).toBe(429);
   });
@@ -152,8 +210,11 @@ describe("task runs", () => {
     expect(preview).toMatchObject({ eligible: true, canExecute: true });
     expect(preview.route).toMatchObject({
       provider: "CLAUDE",
-      modelLabel: "Claude Sonnet 5",
+      modelLabel: "Claude Sonnet",
       effort: "medium",
+      transport: "claude_code_cli",
+      billingMode: "subscription",
+      estimatedCostUsd: 0,
     });
     const callsBefore = (registry.get("CLAUDE") as unknown as { calls: unknown[] }).calls.length;
     const started = await post("ept.manager", `/v1/tasks/${id}/runs`, {
@@ -179,8 +240,12 @@ describe("task runs", () => {
     expect(done).toMatchObject({
       status: "completed",
       isMock: true,
-      modelLabel: "Claude Sonnet 5",
+      modelLabel: "Claude Sonnet",
+      transport: "claude_code_cli",
+      billingMode: "subscription",
+      actualCostUsd: null, // subscription: no API cost
     });
+    expect(done.apiEquivalentUsd).toBeGreaterThan(0); // NOT BILLED estimate
     expect(done.result?.summary).toBeTruthy();
     expect(done.usage?.inputTokens).toBeGreaterThan(0);
     expect(done.events.length).toBeGreaterThan(8);
@@ -263,7 +328,7 @@ describe("agent chat", () => {
       data: { role: string; model: string | null }[];
     }>().data;
     expect(msgs.map((m) => m.role)).toEqual(["human", "agent"]);
-    expect(msgs[1]!.model).toBe("claude-sonnet-5");
+    expect(msgs[1]!.model).toBe("sonnet");
     // Another person cannot use or read this conversation.
     expect(
       (await post("pa.manager", `/v1/conversations/${cid}/messages`, { content: "hi" })).statusCode,

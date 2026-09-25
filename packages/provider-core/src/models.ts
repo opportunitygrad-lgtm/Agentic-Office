@@ -34,7 +34,50 @@ export function claudeModelConfig(
   };
 }
 
+/**
+ * Claude Code subscription defaults: CLI model aliases, never API model IDs.
+ * The owner's plan decides which models the aliases resolve to.
+ */
+export const CLAUDE_CODE_MODEL_DEFAULTS: ProviderModelConfig = {
+  standardModel: "sonnet",
+  premiumModel: "opus",
+  standardEffort: "medium",
+  premiumEffort: "high",
+};
+
+export function claudeCodeModelConfig(
+  env: Record<string, string | undefined> = process.env,
+): ProviderModelConfig {
+  return {
+    standardModel: env.CLAUDE_CODE_MODEL?.trim() || CLAUDE_CODE_MODEL_DEFAULTS.standardModel,
+    premiumModel: env.CLAUDE_CODE_PREMIUM_MODEL?.trim() || CLAUDE_CODE_MODEL_DEFAULTS.premiumModel,
+    standardEffort: effortOr(
+      env.CLAUDE_CODE_EFFORT?.trim(),
+      CLAUDE_CODE_MODEL_DEFAULTS.standardEffort,
+    ),
+    premiumEffort: effortOr(
+      env.CLAUDE_CODE_PREMIUM_EFFORT?.trim(),
+      CLAUDE_CODE_MODEL_DEFAULTS.premiumEffort,
+    ),
+  };
+}
+
+/**
+ * Which price-table model an alias is compared against for the analytical
+ * API-equivalent estimate (NOT BILLED). The model Claude Code actually used is
+ * recorded from its own output after the run.
+ */
+const ALIAS_PRICE_MODELS: Record<string, string> = {
+  sonnet: "claude-sonnet-5",
+  opus: "claude-opus-5-5",
+};
+export function priceModelFor(model: string): string {
+  return ALIAS_PRICE_MODELS[model] ?? model;
+}
+
 const LABELS: Record<string, string> = {
+  sonnet: "Claude Sonnet",
+  opus: "Claude Opus",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-opus-5-5": "Claude Opus 5.5",
   "local-deterministic": "Local deterministic",

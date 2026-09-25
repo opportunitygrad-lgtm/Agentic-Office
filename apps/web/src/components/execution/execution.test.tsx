@@ -12,6 +12,7 @@ import { ME_OWNER, ept } from "@/test/fixtures";
 import "@/test/next-navigation";
 import { SessionProvider } from "../shell/SessionContext";
 import { AgentChatShell } from "../workforce/AgentChatShell";
+import { LiveRunPanel } from "./LiveRun";
 import { ProviderSettings } from "./ProviderSettings";
 import { TaskRunPanel } from "./TaskRunPanel";
 
@@ -72,6 +73,13 @@ const provider = (over: Partial<ProviderStatusDTO>): ProviderStatusDTO => ({
   standardEffort: "medium",
   premiumEffort: "high",
   dailyBudgetUsd: null,
+  transport: "anthropic_api",
+  authMode: "api_key",
+  billingMode: "api",
+  cli: null,
+  premiumAvailable: null,
+  rateLimit: null,
+  runsToday: 0,
   lastHealthCheckAt: null,
   lastSuccessAt: null,
   lastErrorAt: null,
@@ -178,6 +186,9 @@ const preview = (
     approvalRequired: false,
     blockedReason: null,
     isMock: false,
+    transport: "anthropic_api",
+    billingMode: "api",
+    apiEquivalentUsd: null,
     ...over,
   },
   budget: { decision: "allowed", checks: [], reasons: [] },
@@ -221,6 +232,9 @@ const run = (over: Partial<AgentRunDetailDTO> = {}): AgentRunDetailDTO => ({
   usage: null,
   estimatedCostUsd: 0.0524,
   actualCostUsd: null,
+  transport: "anthropic_api",
+  billingMode: "api",
+  apiEquivalentUsd: null,
   latencyMs: null,
   stopReason: null,
   retryCount: 0,
@@ -245,6 +259,126 @@ const RESULT = {
   warnings: [],
   confidence: "medium" as const,
 };
+
+describe("Claude Code subscription provider", () => {
+  const cc = (over: Partial<ProviderStatusDTO>) =>
+    provider({
+      transport: "claude_code_cli",
+      authMode: "subscription_login",
+      billingMode: "subscription",
+      standardModel: "sonnet",
+      premiumModel: "opus",
+      cli: {
+        binary: "claude",
+        version: "2.1.282",
+        authMethod: "claude.ai",
+        subscriptionType: "pro",
+        maxConcurrency: 1,
+      },
+      ...over,
+    });
+  const owner = {
+    ...ME_OWNER,
+    globalPermissions: [...ME_OWNER.globalPermissions, "provider.test", "provider.settings.manage"],
+  };
+
+  it("shows the Claude Code card: Pro subscription, local transport, included billing, API key not used", () => {
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings
+          providers={[
+            cc({
+              connected: true,
+              state: "available",
+              detail: "Claude Code 2.1.282 signed in with a Claude subscription",
+              runsToday: 3,
+              rateLimit: { status: "allowed", resetsAt: null, type: "five_hour" },
+            }),
+          ]}
+        />
+      </SessionProvider>,
+    );
+    const card = screen.getByTestId("claude-code-facts");
+    for (const text of [
+      "Pro subscription",
+      "Local Claude Code",
+      "Connected",
+      "Sonnet",
+      "Included subscription usage",
+      "Not used",
+      "Within usage limits",
+    ])
+      expect(card).toHaveTextContent(text);
+    expect(screen.getByRole("button", { name: "Test Claude Code" })).toBeEnabled();
+    expect(screen.queryByTestId("claude-code-setup")).not.toBeInTheDocument();
+    // No API-key entry anywhere; no credential field of any kind.
+    expect(document.body.textContent).not.toMatch(/Enter API Key|ANTHROPIC_API_KEY/i);
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(screen.getByText(/NOT BILLED — ESTIMATED API EQUIVALENT/)).toBeInTheDocument();
+  });
+
+  it("guides login in Terminal when Claude Code is not authenticated (never asks for credentials)", () => {
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings
+          providers={[
+            cc({
+              state: "login_required",
+              detail: "Login required. Open Terminal and run: claude login",
+            }),
+          ]}
+        />
+      </SessionProvider>,
+    );
+    const setup = screen.getByTestId("claude-code-setup");
+    expect(setup).toHaveTextContent("Claude Code is not authenticated.");
+    expect(setup).toHaveTextContent("Open Terminal.");
+    expect(setup).toHaveTextContent("claude login");
+    expect(setup).toHaveTextContent("Sign in using your Claude Pro account.");
+    expect(screen.getAllByText("Login required").length).toBeGreaterThan(0);
+    expect(document.querySelector("input[type='password']")).toBeNull();
+  });
+
+  it("labels subscription runs as included usage with a NOT BILLED API-equivalent", async () => {
+    stubApi([
+      [
+        "/run-preview",
+        {
+          data: preview({
+            model: "sonnet",
+            modelLabel: "Claude Sonnet",
+            transport: "claude_code_cli",
+            billingMode: "subscription",
+            estimatedCostUsd: 0,
+            apiEquivalentUsd: 0.05,
+          }),
+        },
+      ],
+      ["/runs", { data: [] }],
+    ]);
+    render(
+      <SessionProvider me={ME_OWNER}>
+        <TaskRunPanel taskId="t1" />
+      </SessionProvider>,
+    );
+    expect(await screen.findByTestId("estimated-cost")).toHaveTextContent(
+      "Included in subscription",
+    );
+    render(
+      <LiveRunPanel
+        run={run({
+          status: "completed",
+          transport: "claude_code_cli",
+          billingMode: "subscription",
+          apiEquivalentUsd: 0.031,
+        })}
+        output=""
+      />,
+    );
+    expect(screen.getByText("N/A — included in subscription")).toBeInTheDocument();
+    expect(screen.getByText("~$0.03")).toBeInTheDocument();
+  });
+});
 
 describe("Task run panel", () => {
   it("previews provider/model/effort/cost, runs, streams live output and shows the result", async () => {
