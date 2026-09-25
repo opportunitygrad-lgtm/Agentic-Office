@@ -131,6 +131,45 @@ then purge it from history. Deleting the file is not enough.
   budgets, slug) are rejected with 400; compliance needs `policy.manage`, the
   AI policy `company.settings.manage`.
 
+## Delegation & workforce security (Stage 04)
+
+- **Company isolation in delegation.** Candidates are only agents serving the
+  task's company (or global agents); `company`, `status`, `circular` and
+  `permission` are hard checks that no override can bypass (cross-company
+  attempts return 403 and are audited as `delegation.blocked`). Every agent,
+  team and task id in a request must be visible to the caller (404 otherwise).
+- **Delegation preview** needs `agent.view` in the company and only lists
+  candidates the viewer can already see (department-restricted managers never
+  learn about other departments' agents).
+- **Assignment authority.** Delegating needs `agent.delegation.manage`;
+  assigning/reassigning `task.assign`; pausing `task.pause`. Department-restricted
+  people can only act on their departments' tasks and cannot move work to
+  agents outside them. Overriding a soft check requires a written reason; all
+  assignments are audited.
+- **Role edits cannot grant authority.** Editing roles needs
+  `agent.role.manage` in every company the agent serves (global agents and
+  global templates need the platform-level permission). The compiler resolves
+  conflicts in favour of permissions and company/global policy; override
+  attempts in lower layers are rejected, never applied. Capabilities never
+  imply permissions.
+- **Hierarchy.** Reporting lines are same-company (or global) and cycles are
+  rejected; delegation never loops back into its chain and stops at the depth
+  limit (`min(platform, role)`).
+- **Temporary agents** are task- and company-bound, expire, have fixed budgets
+  within the parent's, inherit prohibitions, are capped at Limited operator and
+  never get a permission the parent cannot exercise. Only a person with
+  platform-level `agent.permissions.manage` can allow a worker to create
+  further workers; agent-initiated creation is approval-gated.
+- **Handoffs** carry summaries, verified facts and references — never the
+  source agent's context. Evidence must be same-company/global, within the
+  destination agent's sensitivity clearance and readable by the person creating
+  the handoff; restricted titles are redacted in listings; contact data is only
+  referenced. The destination assembles its own Context Pack.
+- **Teams & org chart** are scoped to companies where the viewer holds both
+  `team.view` and `agent.view`; members must serve the team's company; GLOBAL
+  teams and the workforce policy need platform-level permissions.
+- **Conversations** are private to their owner; no AI is called in Stage 04.
+
 ## Security logging
 
 - Append-only `audit_events` with `actor_type`, `actor_user_id` /

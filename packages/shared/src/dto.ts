@@ -2,6 +2,7 @@
  * API response shapes (JSON-serialised: dates are ISO strings, money is number USD).
  * The web app consumes these types; the API produces them.
  */
+import type { AgentCapability } from "./workforce";
 import type {
   ActorType,
   MembershipStatus,
@@ -116,6 +117,24 @@ export interface AgentDTO {
   concurrencyLimit: number;
   isTemporary: boolean;
   currentTask: { id: string; title: string; progress: number; status: TaskStatus } | null;
+  /* Stage 04 workforce model */
+  capabilities: AgentCapability[];
+  teams: { id: string; name: string }[];
+  workload: {
+    active: number;
+    queued: number;
+    completedRecent: number;
+    capacity: number;
+    load: number;
+  };
+  escalationAgent: { id: string; name: string } | null;
+  fallbackManager: { id: string; name: string } | null;
+  parentAgent: { id: string; name: string } | null;
+  purpose: string | null;
+  expiresAt: string | null;
+  boundTaskId: string | null;
+  maySpawnTemporary: boolean;
+  roleVersion: number | null;
   lastActiveAt: string | null;
   origin: DataOrigin;
   createdAt: string;

@@ -196,7 +196,8 @@ describe("development seed + dashboard", () => {
     await seedDev(db);
     const second = await seedDev(db);
     expect(second.companies).toBe(3);
-    expect(second.agents).toBe(18);
+    // 18 Stage 01 agents + 3 company managers + 1 temporary worker (Stage 04).
+    expect(second.agents).toBe(22);
 
     const summary = await dashboardSummary(db);
     expect(summary.companies.map((c) => c.slug)).toEqual([
@@ -204,8 +205,10 @@ describe("development seed + dashboard", () => {
       "pilotsassist",
       "opportunitygrad",
     ]);
-    expect(summary.workforce.total).toBe(18);
-    expect(summary.workforce.working).toBe(4);
+    expect(summary.workforce.total).toBe(22);
+    // States are derived from assigned work (Stage 04): an agent with a task awaiting approval is needs_approval.
+    expect(summary.workforce.working).toBe(3);
+    expect(summary.workforce.needs_approval).toBe(1);
     expect(summary.approvals.length).toBe(4);
     expect(summary.usage.isMock).toBe(true);
     expect(summary.containsDevSeedData).toBe(true);

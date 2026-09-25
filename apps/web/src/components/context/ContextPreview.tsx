@@ -589,6 +589,41 @@ export function ContextPreview({
                 </p>
               </Card>
 
+              {pack.handoffs.length > 0 && (
+                <Card
+                  title="Handoffs — prior work (reuse; do not repeat)"
+                  icon={CheckCircle2}
+                  count={pack.handoffs.length}
+                  className="xl:col-span-2"
+                >
+                  <ul className="space-y-2" data-testid="context-handoffs">
+                    {pack.handoffs.map((h) => (
+                      <li
+                        key={h.id}
+                        className="rounded-lg border border-line/70 p-2.5 text-[12.5px]"
+                      >
+                        <p className="font-medium">
+                          From {h.from} · {h.objective}
+                        </p>
+                        <p className="text-fg-muted">{h.summary}</p>
+                        {h.verifiedFacts.length > 0 && (
+                          <ul className="mt-1 list-disc pl-4 text-[12px]">
+                            {h.verifiedFacts.map((f) => (
+                              <li key={f}>{f}</li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="mt-1 text-[11.5px] text-fg-faint">
+                          Action: {h.actionRequired}
+                          {h.doNotResearchAgainUnless.length > 0 &&
+                            ` · Research again only if: ${h.doNotResearchAgainUnless.join("; ")}`}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
+
               <Card
                 title="Knowledge included"
                 icon={CheckCircle2}

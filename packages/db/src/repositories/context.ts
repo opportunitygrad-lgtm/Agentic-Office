@@ -34,6 +34,7 @@ import {
 } from "../schema";
 import { loadAgentAuthorityInput } from "./agent-authority";
 import { recordAuditEvent } from "./audit";
+import { handoffsForContext } from "./handoffs";
 import { assertDepartmentFor, knowledgeLinksFor } from "./knowledge";
 import { getAiPolicy, getCompanyRecord } from "./profile";
 import { loadRuleRows } from "./rules";
@@ -414,10 +415,16 @@ export async function loadContextSources(
     loadRuleRows(db, company.id),
   ]);
 
+  const handoffRows = task ? await handoffsForContext(db, task.id, a.id, company.id) : [];
+
   const retriever = opts.retriever ?? new PostgresKnowledgeRetriever(db);
   let knowledge = await retriever.retrieve({
     companyId: company.id,
-    explicitIds: [...links.map((l) => l.knowledgeId), ...(opts.explicitIds ?? [])],
+    explicitIds: [
+      ...links.map((l) => l.knowledgeId),
+      ...handoffRows.flatMap((h) => h.knowledgeIds),
+      ...(opts.explicitIds ?? []),
+    ],
     text: [task?.title, task?.description].filter(Boolean).join(" "),
     limit: 1000,
   });
@@ -476,6 +483,7 @@ export async function loadContextSources(
     task,
     knowledge,
     links: resolvedLinks,
+    handoffs: handoffRows,
     accessPolicies: policies.map((p) => ({
       agentId: p.agentId,
       departmentId: p.departmentId,

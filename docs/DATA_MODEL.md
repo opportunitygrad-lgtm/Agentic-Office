@@ -80,11 +80,39 @@ Stage 03 audit actions: `company.profile_updated`, `company.ai_policy_updated`,
 `security.knowledge_approval_denied`. Knowledge audit events never contain
 content; confidential/restricted titles are replaced by a label.
 
+## Workforce, roles & delegation (Stage 04)
+
+| Table                                    | Purpose                      | Notes                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `departments` (new columns)              | Department operating model.  | Mission, manager agent, human manager, default provider, concurrency limit, daily budget, active, instructions, allowed task types, handoff destinations. `company_id` NULL = global.                                                                                                                                                          |
+| `agents` (new columns)                   | Workforce fields.            | Capabilities, escalation agent, fallback manager, role template, parent agent, bound task, purpose, `may_spawn_temporary`, terminated at. Status gained `expired`, `terminated`.                                                                                                                                                               |
+| `tasks` (new columns)                    | Requirements & claims.       | Required capabilities, preferred department/agent/team, provider preference, max budget/concurrency, delegation/parallel/external flags, approval requirements, result schema, stopping condition, expected outcome, target entity, work items, normalised objective, department, team, delegation depth, delegated-from agent, claim + lease. |
+| `workforce_policy`                       | Platform limits (singleton). | Global active-agent limit (3), max delegation depth, high-cost threshold, temporary-agent expiry/approval budget/company limit.                                                                                                                                                                                                                |
+| `role_templates`                         | Company role templates.      | Company (NULL = global), key (unique per company, NULLS NOT DISTINCT), base template, department, capabilities, structured role.                                                                                                                                                                                                               |
+| `agent_role_versions`                    | Versioned agent roles.       | Agent, version (unique), role, change summary, material flag, current flag (partial unique), effective from, created/approved by. Never overwritten.                                                                                                                                                                                           |
+| `teams`, `team_members`                  | Teams.                       | Company (NULL = global), department, leader, purpose, concurrency, default task types, active, temporary + expiry; membership rows.                                                                                                                                                                                                            |
+| `task_delegations`                       | Delegation history.          | Task, company, from/to agent, to team, outcome, override flag, reason, explanation, decided by.                                                                                                                                                                                                                                                |
+| `handoffs`                               | Handoff packets.             | Task, company, source agent, exactly one destination (agent/team/department, check constraint), type, objective, summary, verified facts, references, knowledge ids, contact reference, action, priority, deadline, do-not-research-unless, status + timestamps.                                                                               |
+| `agent_messages`                         | Agent messaging.             | Sender (human/agent/service/system), recipient agent or team, task, type, content, payload, read at.                                                                                                                                                                                                                                           |
+| `conversations`, `conversation_messages` | Conversation shell.          | Owner user, agent, company, optional task, status; messages (human/agent/system). No AI replies in Stage 04.                                                                                                                                                                                                                                   |
+
+Stage 04 audit actions: `agent.role_version_created`, `agent.role_updated`,
+`role_template.updated`, `agent.manager_changed`, `agent.capabilities_changed`,
+`agent.team_assigned`, `team.created`, `team.updated`, `department.updated`,
+`workforce.policy_updated`, `instruction.preview_generated`,
+`task.created`, `task.duplicate_detected`, `task.requirements_updated`,
+`task.delegated`, `task.reassigned`, `task.paused`, `task.resumed`,
+`task.completed`, `task.cancelled`, `delegation.blocked`, `handoff.created`,
+`handoff.accepted|rejected|completed|cancelled`, `temp_agent.created`,
+`temp_agent.approval_requested`, `temp_agent.expired`, `temp_agent.terminated`, `agent.message_sent`,
+`conversation.created`.
+
 ## Status vocabularies
 
 Defined once in `packages/shared/src/enums.ts` and turned into pgEnums.
 
-- **Agent:** sleeping, queued, working, waiting, blocked, needs_approval, paused, failed, completed, offline
+- **Agent:** sleeping, queued, working, waiting, blocked, needs_approval, paused, failed (shown as Error), completed, offline, expired, terminated
+- **Workforce** (`packages/shared/src/workforce.ts`): 26 capabilities; instruction layers platform → global → company → department → template → agent → task → task_note; delegation outcomes; budget decisions allowed/requires_approval/blocked; duplicate levels exact/likely/related/none; handoff status pending, accepted, rejected, completed, cancelled; handoff types; agent message types
 - **Task:** queued, assigned, running, waiting, needs_approval, paused, completed, failed, cancelled
 - **Approval:** pending, approved, rejected, expired, cancelled
 - **Approval type:** email_send, ad_launch, ad_budget_increase, financial_action, deep_research, browser_action, website_deployment, code_deployment, legal_commercial_action, destructive_action, custom

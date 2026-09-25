@@ -44,6 +44,9 @@ importers:
       '@aibos/access-core':
         specifier: workspace:*
         version: link:../../packages/access-core
+      '@aibos/agent-core':
+        specifier: workspace:*
+        version: link:../../packages/agent-core
       '@aibos/browser-core':
         specifier: workspace:*
         version: link:../../packages/browser-core
@@ -230,6 +233,9 @@ importers:
       '@aibos/context-core':
         specifier: workspace:*
         version: link:../context-core
+      '@aibos/delegation-core':
+        specifier: workspace:*
+        version: link:../delegation-core
       '@aibos/integration-core':
         specifier: workspace:*
         version: link:../integration-core
@@ -255,6 +261,12 @@ importers:
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
+
+  packages/delegation-core:
+    dependencies:
+      '@aibos/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/integration-core:
     dependencies:

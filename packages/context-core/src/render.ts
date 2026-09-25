@@ -19,6 +19,18 @@ export function renderRule(r: ContextRuleEntry): string {
   }\n`;
 }
 
+export function renderHandoff(h: AgentContextPack["handoffs"][number]): string {
+  return (
+    `- From ${h.from} [${h.type}, ${h.status}] — ${h.objective}\n  Summary: ${h.summary}\n` +
+    h.verifiedFacts.map((f) => `  Verified: ${f}\n`).join("") +
+    (h.sourceReferences.length ? `  Sources: ${h.sourceReferences.join("; ")}\n` : "") +
+    `  Action required: ${h.actionRequired}\n` +
+    (h.doNotResearchAgainUnless.length
+      ? `  Do not research again unless: ${h.doNotResearchAgainUnless.join("; ")}\n`
+      : "")
+  );
+}
+
 export function renderKnowledge(k: ContextKnowledgeEntry): string {
   const verified = k.lastVerifiedAt ? `, last verified ${k.lastVerifiedAt.slice(0, 10)}` : "";
   const flags = k.warnings.length ? ` ⚠ ${k.warnings.join("; ")}` : "";
@@ -66,6 +78,10 @@ export function renderContextPack(pack: AgentContextPack): string {
     ),
     section("CURRENT TASK", renderTask(pack)),
     section("COMPANY RULES", rules.map(renderRule).join("") + lines(pack.rules.aiPolicy)),
+    section(
+      "HANDOFFS — PRIOR WORK (reuse; do not repeat)",
+      (pack.handoffs ?? []).map(renderHandoff).join(""),
+    ),
     section("RELEVANT KNOWLEDGE", pack.knowledge.map(renderKnowledge).join("")),
     section(
       "UNVERIFIED CONTEXT (NOT AUTHORITATIVE — verify before relying on it)",

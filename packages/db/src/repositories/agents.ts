@@ -1,6 +1,6 @@
 import { and, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { getAgentTemplate } from "@aibos/agent-core";
+import { TEMPLATE_CAPABILITIES, getAgentTemplate } from "@aibos/agent-core";
 import {
   OPEN_TASK_STATUSES,
   createAgentSchema,
@@ -12,17 +12,22 @@ import {
   type CreateAgentInput,
   type ProviderType,
   type TaskStatus,
+  type AgentCapability,
 } from "@aibos/shared";
 import type { Database } from "../client";
 import { ConflictError, NotFoundError } from "../errors";
 import {
   agentCompanyAssignments,
+  agentRoleVersions,
   agents,
   companies,
   departments,
   tasks,
+  teamMembers,
+  teams,
   type Agent,
 } from "../schema";
+import { agentWorkloads } from "./workforce";
 import { applyTemplateGrants } from "./agent-authority";
 import { recordAuditEvent } from "./audit";
 import {
@@ -45,6 +50,8 @@ export interface AgentFilters {
   provider?: ProviderType;
   q?: string;
   ids?: string[];
+  teamId?: string;
+  temporary?: boolean;
   /** Caller's visible companies (company isolation). Defaults to everything. */
   scope?: AccessScope;
 }
@@ -79,6 +86,11 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
       or(ilike(agents.name, `%${filters.q}%`), ilike(agents.description, `%${filters.q}%`))!,
     );
   if (filters.ids) where.push(filters.ids.length ? inArray(agents.id, filters.ids) : sql`false`);
+  if (filters.teamId)
+    where.push(
+      sql`${agents.id} in (select ${teamMembers.agentId} from ${teamMembers} where ${teamMembers.teamId} = ${filters.teamId})`,
+    );
+  if (filters.temporary !== undefined) where.push(eq(agents.isTemporary, filters.temporary));
   const scope = filters.scope ?? FULL_SCOPE;
   if (scope.companyIds !== "all") {
     const visible = [...scope.companyIds];
@@ -112,7 +124,7 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
   if (!rows.length) return [];
   const ids = rows.map((r) => r.agent.id);
 
-  const [assignments, openTasks] = await Promise.all([
+  const [assignments, openTasks, teamRows, workloads, related, roleVersions] = await Promise.all([
     db
       .select({
         agentId: agentCompanyAssignments.agentId,
@@ -149,7 +161,40 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
           scopeWhere(tasks.companyId, scope),
         ),
       ),
+    db
+      .select({
+        agentId: teamMembers.agentId,
+        id: teams.id,
+        name: teams.name,
+        companyId: teams.companyId,
+      })
+      .from(teamMembers)
+      .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+      .where(and(inArray(teamMembers.agentId, ids), scopeWhere(teams.companyId, scope))),
+    agentWorkloads(db, ids),
+    db
+      .select({ id: agents.id, name: agents.name })
+      .from(agents)
+      .where(
+        inArray(
+          agents.id,
+          rows
+            .flatMap((r) =>
+              [r.agent.escalationAgentId, r.agent.fallbackManagerId, r.agent.parentAgentId].filter(
+                (x): x is string => !!x,
+              ),
+            )
+            .concat([ids[0]!]),
+        ),
+      ),
+    db
+      .select({ agentId: agentRoleVersions.agentId, version: agentRoleVersions.version })
+      .from(agentRoleVersions)
+      .where(and(inArray(agentRoleVersions.agentId, ids), eq(agentRoleVersions.isCurrent, true))),
   ]);
+  const nameOf = new Map(related.map((r) => [r.id, r.name]));
+  const ref = (id: string | null) => (id && nameOf.has(id) ? { id, name: nameOf.get(id)! } : null);
+  const versionOf = new Map(roleVersions.map((r) => [r.agentId, r.version]));
 
   const companiesByAgent = new Map<string, AgentDTO["companies"]>();
   for (const a of assignments) {
@@ -226,6 +271,23 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
               status: current.status,
             }
           : null,
+        capabilities: a.capabilities as AgentCapability[],
+        teams: teamRows.filter((t) => t.agentId === a.id).map((t) => ({ id: t.id, name: t.name })),
+        workload: workloads.get(a.id) ?? {
+          active: 0,
+          queued: 0,
+          completedRecent: 0,
+          capacity: a.concurrencyLimit,
+          load: 0,
+        },
+        escalationAgent: ref(a.escalationAgentId),
+        fallbackManager: ref(a.fallbackManagerId),
+        parentAgent: ref(a.parentAgentId),
+        purpose: a.purpose,
+        expiresAt: iso(a.expiresAt),
+        boundTaskId: a.boundTaskId,
+        maySpawnTemporary: a.maySpawnTemporary,
+        roleVersion: versionOf.get(a.id) ?? null,
         lastActiveAt: iso(a.lastActiveAt),
         origin: a.origin,
         createdAt: a.createdAt.toISOString(),
@@ -284,6 +346,7 @@ export async function createAgent(
         prohibitedActions: tpl.prohibitedActions,
         allowedTools: tpl.defaultTools,
         approvalRequirements: tpl.approvalRequirements,
+        capabilities: TEMPLATE_CAPABILITIES[data.templateKey],
         perTaskBudget: data.perTaskBudget,
         dailyBudget: data.dailyBudget,
         maxExternalSearches: data.maxExternalSearches,

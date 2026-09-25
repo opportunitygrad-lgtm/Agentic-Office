@@ -538,6 +538,7 @@ describe("Context Preview", () => {
       compliance: [],
       aiPolicy: [{ label: "Email auto-send", value: "Disabled" }],
     },
+    handoffs: [],
     knowledge: [
       {
         id: "k1",

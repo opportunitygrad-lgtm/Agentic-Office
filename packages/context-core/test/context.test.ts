@@ -454,6 +454,38 @@ describe("rules, permissions and priorities", () => {
   });
 });
 
+describe("handoffs (Stage 04)", () => {
+  it("includes handoff packets and their evidence, never another company's", () => {
+    const evidence = k({ companyId: EPT, type: "market_research", title: "Verified school list" });
+    const handoff = {
+      id: "h1",
+      companyId: EPT,
+      from: "EPT Flight School Research",
+      type: "research_result",
+      objective: "Introduce EPT to verified schools",
+      summary: "Three schools verified against the register.",
+      verifiedFacts: ["School A holds an ATO approval"],
+      sourceReferences: ["Official register extract"],
+      actionRequired: "Draft introduction emails",
+      doNotResearchAgainUnless: ["Contact details are missing"],
+      knowledgeIds: [evidence.id],
+      status: "accepted",
+    };
+    const foreign = { ...handoff, id: "h2", companyId: PA, summary: "PilotsAssist secret plan" };
+    const pack = assembleContextPack(
+      req(),
+      sources({ knowledge: [evidence], handoffs: [handoff, foreign] }),
+    );
+    expect(pack.handoffs.map((h) => h.id)).toEqual(["h1"]);
+    expect(pack.knowledge.find((e) => e.id === evidence.id)?.reasons).toContain("handoff_link");
+    const text = renderContextPack(pack);
+    expect(text).toContain("HANDOFFS — PRIOR WORK");
+    expect(text).toContain("Do not research again unless: Contact details are missing");
+    expect(text).not.toContain("PilotsAssist secret plan");
+    expect(pack.metadata.blockedCrossCompany).toBe(1);
+  });
+});
+
 describe("company action evaluation (future execution controllers)", () => {
   const ogBudget = rule({
     kind: "commercial",

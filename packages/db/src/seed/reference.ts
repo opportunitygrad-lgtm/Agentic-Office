@@ -5,12 +5,18 @@ import {
   SERVICE_IDENTITIES,
   SYSTEM_ROLES,
 } from "@aibos/access-core";
-import { AGENT_TEMPLATES, DEFAULT_DEPARTMENTS } from "@aibos/agent-core";
+import {
+  AGENT_TEMPLATES,
+  DEFAULT_DEPARTMENTS,
+  TEMPLATE_CAPABILITIES,
+  TEMPLATE_ROLES,
+} from "@aibos/agent-core";
 import { INTEGRATION_CATALOG } from "@aibos/integration-core";
 import type { Database } from "../client";
 import {
   agentTemplates,
   approvalRequirements,
+  workforcePolicy,
   departments,
   integrations,
   permissions,
@@ -27,7 +33,19 @@ import {
 export async function syncReferenceData(db: Database): Promise<void> {
   await db
     .insert(departments)
-    .values(DEFAULT_DEPARTMENTS.map((d) => ({ ...d, companyId: null })))
+    .values(
+      DEFAULT_DEPARTMENTS.map((d) => ({
+        slug: d.slug,
+        name: d.name,
+        description: d.description,
+        color: d.color,
+        mission: d.mission ?? null,
+        instructions: d.instructions ?? [],
+        handoffDestinations: d.handoffDestinations ?? [],
+        concurrencyLimit: d.concurrencyLimit ?? null,
+        companyId: null,
+      })),
+    )
     .onConflictDoUpdate({
       target: [departments.companyId, departments.slug],
       set: {
@@ -54,7 +72,8 @@ export async function syncReferenceData(db: Database): Promise<void> {
         approvalRequirements: t.approvalRequirements,
         capabilities: t.capabilities,
         promptVersion: t.promptVersion,
-        definition: { source: "code", version: 1 },
+        agentCapabilities: TEMPLATE_CAPABILITIES[t.key],
+        definition: { source: "code", version: 2, role: TEMPLATE_ROLES[t.key] },
       })),
     )
     .onConflictDoUpdate({
@@ -71,8 +90,15 @@ export async function syncReferenceData(db: Database): Promise<void> {
         prohibitedActions: sql`excluded.prohibited_actions`,
         approvalRequirements: sql`excluded.approval_requirements`,
         capabilities: sql`excluded.capabilities`,
+        agentCapabilities: sql`excluded.agent_capabilities`,
+        definition: sql`excluded.definition`,
       },
     });
+
+  // Agents without capabilities inherit their template's (never overwrites edits).
+  await db.execute(sql`update agents set capabilities = t.agent_capabilities
+    from agent_templates t where agents.template_key = t.key and agents.capabilities = '{}'::text[]`);
+  await db.insert(workforcePolicy).values({ id: 1 }).onConflictDoNothing();
 
   await db
     .insert(integrations)

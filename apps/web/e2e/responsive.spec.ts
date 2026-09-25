@@ -12,6 +12,7 @@ const ROUTES = [
   "/workforce/agents",
   "/workforce/templates",
   "/workforce/teams",
+  "/workforce/organisation",
   "/tasks/active",
   "/live",
   "/approvals",
@@ -75,9 +76,20 @@ test("no horizontal overflow on any page at target widths", async ({ page }) => 
   ).json()) as {
     data: { id: string; title: string }[];
   };
+  const teams = (await (
+    await page.request.get("/api/v1/teams?company=euro-pilot-training")
+  ).json()) as {
+    data: { id: string }[];
+  };
   const dynamic = [
     `/workforce/agents/${agents.data.find((a) => a.name === "EPT Marketing")!.id}`,
     `/tasks/item/${tasks.data.find((t) => t.title === "Draft partnership introduction emails")!.id}`,
+    `/tasks/item/${tasks.data.find((t) => t.title === "Find EASA flight schools in Portugal")!.id}`,
+    ...["role", "instructions", "chat"].map(
+      (tab) =>
+        `/workforce/agents/${agents.data.find((a) => a.name === "EPT Partnerships")!.id}?tab=${tab}`,
+    ),
+    `/workforce/teams/${teams.data[0]!.id}`,
   ];
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });

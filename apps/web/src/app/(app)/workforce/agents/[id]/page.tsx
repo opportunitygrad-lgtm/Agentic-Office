@@ -2,19 +2,34 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import {
   AUTONOMY_LABELS,
+  formatUsd,
   titleCase,
   type AgentDTO,
   type AgentKnowledgeProfileDTO,
   type MeDTO,
   type TaskDTO,
 } from "@aibos/shared";
-import { AGENT_STATUS_META, MockBadge, Panel, StatusPill } from "@aibos/ui";
+import { AGENT_STATUS_META, MockBadge, Panel, StatusPill, cn } from "@aibos/ui";
 import { AgentAuthorityPanel } from "@/components/agents/AgentAuthorityPanel";
 import { PageError } from "@/components/common/PageError";
 import { Unauthorised } from "@/components/common/Unauthorised";
 import { ContextPreview } from "@/components/context/ContextPreview";
 import { KnowledgeProfilePanel } from "@/components/context/KnowledgeProfilePanel";
+import { AgentChatShell } from "@/components/workforce/AgentChatShell";
+import { AgentStructurePanel } from "@/components/workforce/AgentStructurePanel";
+import { InstructionPreview } from "@/components/workforce/InstructionPreview";
+import { RoleEditor } from "@/components/workforce/RoleEditor";
 import { apiGet, apiTry, type SearchParams } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
+
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "role", label: "Role & Instructions" },
+  { key: "instructions", label: "Instruction Preview" },
+  { key: "context", label: "Context" },
+  { key: "chat", label: "Chat" },
+] as const;
+type TabKey = (typeof TABS)[number]["key"];
 
 export const metadata = { title: "Agent detail" };
 
@@ -50,12 +65,23 @@ export default async function AgentDetailPage({
     .filter((c) => can(me, "context.preview", c.id))
     .map((c) => ({ slug: c.slug, name: c.name }));
   const requested = typeof sp.company === "string" ? sp.company : undefined;
+  const tab: TabKey = TABS.some((t) => t.key === sp.tab) ? (sp.tab as TabKey) : "overview";
   const meta = AGENT_STATUS_META[agent.status];
-  const canEdit =
-    me.globalPermissions.includes("agent.edit") ||
+  const canAll = (permission: string) =>
+    me.globalPermissions.includes(permission) ||
     (agent.scope !== "global" &&
       agent.companies.length > 0 &&
-      agent.companies.every((c) => can(me, "agent.edit", c.id)));
+      agent.companies.every((c) => can(me, permission, c.id)));
+  const canEdit = canAll("agent.edit");
+  const roleCompanies = serving
+    .filter((c) => can(me, "agent.role.view", c.id))
+    .map((c) => ({ slug: c.slug, name: c.name }));
+  const chatCompanies = serving
+    .filter((c) => can(me, "conversation.create", c.id))
+    .map((c) => ({ id: c.id, name: c.name }));
+  const taskOptions = (tasks?.data ?? [])
+    .filter((t) => t.company)
+    .map((t) => ({ id: t.id, title: t.title, companySlug: t.company!.slug }));
 
   return (
     <div className="mx-auto max-w-[1680px]">
@@ -82,14 +108,112 @@ export default async function AgentDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_400px]">
+      <nav
+        aria-label="Agent sections"
+        className="mb-5 flex gap-1 overflow-x-auto border-b border-line"
+      >
+        {TABS.map((t) => (
+          <Link
+            key={t.key}
+            href={`/workforce/agents/${agent.id}?tab=${t.key}${requested ? `&company=${requested}` : ""}`}
+            aria-current={tab === t.key ? "page" : undefined}
+            className={cn(
+              "focus-ring -mb-px whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium",
+              tab === t.key
+                ? "border-accent text-fg"
+                : "border-transparent text-fg-muted hover:text-fg",
+            )}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </nav>
+
+      {tab === "overview" && (
+        <div className="grid grid-cols-1 gap-5 2xl:grid-cols-[minmax(0,1fr)_400px]">
+          <div className="min-w-0 space-y-5">
+            <Panel title="Workload" eyebrow="Derived from assigned tasks">
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  ["Active", agent.workload.active],
+                  ["Queued", agent.workload.queued],
+                  ["Capacity", agent.workload.capacity],
+                  ["Completed (7d)", agent.workload.completedRecent],
+                ].map(([k, v]) => (
+                  <div key={String(k)} className="rounded-xl border border-line p-3">
+                    <dt className="text-[11px] text-fg-faint">{k}</dt>
+                    <dd className="num text-[18px] font-semibold">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-3 text-[12.5px] text-fg-muted">
+                {agent.currentTask ? (
+                  <>
+                    Current task:{" "}
+                    <Link
+                      className="font-medium text-fg hover:underline"
+                      href={`/tasks/item/${agent.currentTask.id}`}
+                    >
+                      {agent.currentTask.title}
+                    </Link>
+                  </>
+                ) : (
+                  "No current task."
+                )}
+                {" · "}Teams: {agent.teams.map((t) => t.name).join(", ") || "none"}
+                {" · "}Per-task budget {formatUsd(agent.perTaskBudget)}
+              </p>
+              {agent.isTemporary && (
+                <p className="mt-2 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px] text-fg-muted">
+                  Temporary worker under {agent.parentAgent?.name ?? "—"} ·{" "}
+                  {agent.purpose ?? "No purpose recorded"} · expires{" "}
+                  {formatDateTime(agent.expiresAt)}
+                </p>
+              )}
+            </Panel>
+            <Panel title="Hierarchy & capabilities">
+              <AgentStructurePanel
+                agent={agent}
+                canEditHierarchy={canEdit && !agent.isTemporary}
+                canEditCapabilities={canAll("agent.role.manage") && !agent.isTemporary}
+              />
+            </Panel>
+          </div>
+          <div className="space-y-5">
+            <Panel title="Access & Authority">
+              <AgentAuthorityPanel agentId={agent.id} />
+            </Panel>
+            {profile && (
+              <KnowledgeProfilePanel agentId={agent.id} profile={profile.data} canEdit={canEdit} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "role" && <RoleEditor agentId={agent.id} />}
+
+      {tab === "instructions" && (
+        <section aria-labelledby="instructions-heading">
+          <h2 id="instructions-heading" className="mb-1 text-[16px] font-semibold tracking-tight">
+            Instruction preview
+          </h2>
+          <p className="mb-3 text-[13px] text-fg-muted">
+            The compiled instruction stack, highest priority first. Lower layers never override
+            higher ones; permissions and company policy win every conflict. No AI provider is
+            called.
+          </p>
+          <InstructionPreview agentId={agent.id} companies={roleCompanies} tasks={taskOptions} />
+        </section>
+      )}
+
+      {tab === "context" && (
         <section aria-labelledby="context-heading" className="min-w-0">
           <h2 id="context-heading" className="mb-1 text-[16px] font-semibold tracking-tight">
             Context preview
           </h2>
           <p className="mb-3 text-[13px] text-fg-muted">
             What this agent would know if it ran now — assembled deterministically from approved
-            company knowledge, rules and its permissions.
+            company knowledge, rules, handoffs and its permissions.
           </p>
           {previewable.length ? (
             <ContextPreview
@@ -105,15 +229,9 @@ export default async function AgentDetailPage({
             />
           )}
         </section>
-        <div className="space-y-5">
-          <Panel title="Access & Authority">
-            <AgentAuthorityPanel agentId={agent.id} />
-          </Panel>
-          {profile && (
-            <KnowledgeProfilePanel agentId={agent.id} profile={profile.data} canEdit={canEdit} />
-          )}
-        </div>
-      </div>
+      )}
+
+      {tab === "chat" && <AgentChatShell agentId={agent.id} companies={chatCompanies} />}
     </div>
   );
 }

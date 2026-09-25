@@ -13,6 +13,10 @@ export type {
   BrandRule,
   CommercialRule,
   ComplianceRule,
+  Team,
+  Handoff,
+  RoleTemplate,
+  Task,
 } from "./schema";
 export * from "./repositories/util";
 export * from "./repositories/audit";
@@ -32,4 +36,9 @@ export * from "./repositories/profile";
 export * from "./repositories/knowledge";
 export * from "./repositories/rules";
 export * from "./repositories/context";
+export * from "./repositories/workforce";
+export * from "./repositories/agent-roles";
+export * from "./repositories/delegation";
+export * from "./repositories/handoffs";
+export * from "./repositories/temporary-agents";
 export { syncReferenceData, syncAccessReferenceData } from "./seed/reference";

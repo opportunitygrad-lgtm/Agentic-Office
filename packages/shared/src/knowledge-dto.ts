@@ -290,7 +290,8 @@ export type InclusionReason =
   | "global_policy"
   | "agent_channel"
   | "agent_domain"
-  | "unverified_allowed";
+  | "unverified_allowed"
+  | "handoff_link";
 
 export type ExclusionReason =
   | "draft"
@@ -353,6 +354,20 @@ export interface ContextExclusion {
   detail: string;
 }
 
+export interface ContextHandoffEntry {
+  id: string;
+  from: string;
+  type: string;
+  objective: string;
+  summary: string;
+  verifiedFacts: string[];
+  sourceReferences: string[];
+  actionRequired: string;
+  doNotResearchAgainUnless: string[];
+  knowledgeIds: string[];
+  status: string;
+}
+
 export interface AgentContextPack {
   version: string;
   request: {
@@ -404,6 +419,8 @@ export interface AgentContextPack {
   };
   knowledge: ContextKnowledgeEntry[];
   unverified: ContextKnowledgeEntry[];
+  /** Stage 04: structured handoff packets addressed to this agent for this task (prior work to reuse). */
+  handoffs: ContextHandoffEntry[];
   prohibitedActions: { action: string; source: string }[];
   requiredApprovals: { action: string; requirement: string; source: string }[];
   excluded: ContextExclusion[];

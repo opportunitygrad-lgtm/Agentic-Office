@@ -80,6 +80,35 @@ const CATEGORIES: { category: string; permissions: Omit<PermissionDefinition, "c
     ],
   },
   {
+    category: "Workforce",
+    permissions: [
+      p("team.view", "View teams", "See teams, departments and the organisation chart."),
+      p("team.manage", "Manage teams", "Create and edit teams, members and department settings.", {
+        sensitive: true,
+      }),
+      p(
+        "agent.role.view",
+        "View agent roles",
+        "See agent roles, history and instruction previews.",
+      ),
+      p(
+        "agent.role.manage",
+        "Manage agent roles",
+        "Edit permanent agent instructions, capabilities and role templates.",
+        { sensitive: true },
+      ),
+      p(
+        "agent.delegation.manage",
+        "Manage delegation",
+        "Delegate tasks between agents and accept delegation recommendations.",
+      ),
+      p("handoff.view", "View handoffs", "See agent-to-agent handoffs and messages."),
+      p("handoff.manage", "Manage handoffs", "Create, accept and complete handoffs."),
+      p("conversation.view", "View agent conversations", "Read conversations with agents."),
+      p("conversation.create", "Chat with agents", "Start conversations with agents."),
+    ],
+  },
+  {
     category: "Tasks",
     permissions: [
       p("task.view", "View tasks", "See tasks and their progress."),

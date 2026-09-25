@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { getAgentTemplate } from "@aibos/agent-core";
+import { TEMPLATE_CAPABILITIES, getAgentTemplate } from "@aibos/agent-core";
 import {
   OPEN_TASK_STATUSES,
   createCompanySchema,
@@ -304,6 +304,7 @@ export async function createCompany(
             prohibitedActions: tpl.prohibitedActions,
             allowedTools: tpl.defaultTools,
             approvalRequirements: tpl.approvalRequirements,
+            capabilities: TEMPLATE_CAPABILITIES[key],
             readPermissions: [`company:${slug}:read`],
             writePermissions: [],
             origin,

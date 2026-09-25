@@ -52,6 +52,8 @@ export interface RelevanceSignals {
   taskLinked: ReadonlySet<string>;
   agentLinked: ReadonlySet<string>;
   explicitIds: ReadonlySet<string>;
+  /** Knowledge referenced by handoffs to this agent (reuse prior research). */
+  handoffLinked?: ReadonlySet<string>;
 }
 
 export interface RelevanceResult {
@@ -82,6 +84,8 @@ export function scoreKnowledge(item: KnowledgeCandidate, s: RelevanceSignals): R
   if (s.taskLinked.has(item.id)) add(100, "task_link", "Explicitly linked to this task");
   if (s.explicitIds.has(item.id)) add(100, "explicit_request", "Explicitly requested");
   if (s.agentLinked.has(item.id)) add(80, "agent_link", "Linked to this agent");
+  if (s.handoffLinked?.has(item.id))
+    add(100, "handoff_link", "Evidence in a handoff to this agent");
   if (s.profile.requiredTypes.includes(item.type))
     add(40, "required_by_agent", `Required knowledge type for this agent (${item.type})`);
   if (s.requestedCategories.includes(item.type))

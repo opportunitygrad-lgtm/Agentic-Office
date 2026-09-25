@@ -106,6 +106,14 @@ export const AGENT_PERMISSIONS: readonly AgentPermissionDefinition[] = [
     "medium",
     "deep_research",
   ),
+  d(
+    "action.create_temp_worker",
+    "Actions",
+    "TEMP WORKERS",
+    "Create temporary worker agents (Stage 04)",
+    "high",
+    "custom",
+  ),
 ];
 
 export const AGENT_PERMISSION_KEYS: ReadonlySet<string> = new Set(

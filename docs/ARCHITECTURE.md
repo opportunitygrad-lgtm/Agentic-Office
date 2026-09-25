@@ -43,6 +43,7 @@ AUDIT LOG                        audit_events (append-only)
 | `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                                                  |
 | `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                                                      |
 | `packages/context-core`     | Stage 03 Agent Context Engine: deterministic context-pack assembly, relevance, budgets, rule evaluation, retriever/ingestion contracts. Pure, browser-safe. |
+| `packages/delegation-core`  | Stage 04 delegation engine: deterministic `decideDelegation`, per-candidate checks, budget decisions, duplicate detection. Pure, browser-safe.              |
 | `packages/ui`               | Accessible UI primitives (buttons, status pills, progress, panels, sparkline, skeletons) and status-tone mapping.                                           |
 | `infrastructure`            | Docker Compose for PostgreSQL 16 and Redis 7 (development).                                                                                                 |
 
@@ -273,3 +274,37 @@ Providers (Stages 07–09) receive only the pack. They never query company
 tables, never see other companies' data and never get raw conversation
 history. Semantic retrieval can later replace the `KnowledgeRetriever`
 implementation without changing the engine or its isolation guarantees.
+
+## Workforce, roles & delegation (Stage 04)
+
+Details: `docs/AGENT_OPERATING_MODEL.md`.
+
+- **Instruction stack.** `@aibos/agent-core` holds the platform safety rules,
+  the global operating policy (structured rules), template roles and the
+  instruction compiler. `compileInstructionsFor` in `@aibos/db` loads the
+  layers (company critical rules and AI policy from Stage 03, department,
+  role template, current agent role version, task and task notes, agent
+  authority) and returns a provider-neutral `CompiledAgentInstructionPack`.
+- **Delegation.** `@aibos/delegation-core` is pure: `decideDelegation(request)`
+  → `DelegationDecisionDTO`. `@aibos/db` builds the request
+  (`buildDelegationRequest`: candidates with authority, workloads, budgets,
+  teams, concurrency, open tasks, chain) and applies decisions under a row lock
+  (`delegateTask`, `assignTask`), recording `task_delegations`, agent messages
+  and audit events.
+- **Context reuse.** Handoffs feed the Stage 03 Context Engine
+  (`ContextSources.handoffs`); the destination agent's pack is assembled
+  independently. The Context Engine itself is unchanged apart from the new
+  handoff source.
+- **Agent state** is derived from task assignments by `refreshAgentStates`
+  after every assignment/status change; manual states are preserved.
+- **API.** `apps/api/src/workforce-routes.ts`: operating policy, workforce
+  policy, departments, teams, organisation chart, manager stats, agent
+  role/instructions/hierarchy/capabilities, role templates, temporary agents,
+  task creation with duplicate handling, requirements, delegation preview,
+  delegate/assign/pause/resume/complete/cancel, handoffs, agent messages and
+  conversations — all behind Stage 02 authentication and authorization.
+
+```
+Task → delegation-core (who?) → assignment → Context Engine (what it knows)
+     → instruction compiler (how it must behave) → [Stage 05: provider]
+```

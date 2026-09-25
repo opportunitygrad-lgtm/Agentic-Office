@@ -69,10 +69,12 @@ export const AGENT_STATUS_META: Record<
   blocked: { label: "Blocked", tone: "danger" },
   needs_approval: { label: "Needs approval", tone: "approval", pulse: true },
   paused: { label: "Paused", tone: "neutral" },
-  failed: { label: "Failed", tone: "danger" },
+  failed: { label: "Error", tone: "danger" },
   sleeping: { label: "Sleeping", tone: "idle" },
   completed: { label: "Completed", tone: "done" },
   offline: { label: "Offline", tone: "neutral" },
+  expired: { label: "Expired", tone: "idle" },
+  terminated: { label: "Terminated", tone: "neutral" },
 };
 
 export const TASK_STATUS_META: Record<TaskStatus, { label: string; tone: Tone; pulse?: boolean }> =

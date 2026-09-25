@@ -38,6 +38,7 @@ export const INCLUSION_LABELS: Record<InclusionReason, string> = {
   critical_rule: "Critical company policy",
   restriction: "Binding restriction",
   task_link: "Explicitly linked to task",
+  handoff_link: "Evidence from a handoff",
   agent_link: "Linked to this agent",
   explicit_request: "Explicitly requested",
   required_by_agent: "Required by agent template",

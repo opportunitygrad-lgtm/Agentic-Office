@@ -198,7 +198,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "research",
     status: "working",
     company: EPT,
-    reportsTo: "group-manager",
+    reportsTo: "ept-manager",
   },
   {
     key: "ept-partnerships",
@@ -207,7 +207,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "partnerships",
     status: "sleeping",
     company: EPT,
-    reportsTo: "group-manager",
+    reportsTo: "ept-manager",
   },
   {
     key: "ept-marketing",
@@ -216,7 +216,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "marketing",
     status: "sleeping",
     company: EPT,
-    reportsTo: "group-manager",
+    reportsTo: "ept-manager",
   },
   {
     key: "ept-sales",
@@ -225,7 +225,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "sales",
     status: "sleeping",
     company: EPT,
-    reportsTo: "group-manager",
+    reportsTo: "ept-manager",
   },
   {
     key: "ept-grok",
@@ -245,7 +245,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "research",
     status: "sleeping",
     company: PA,
-    reportsTo: "group-manager",
+    reportsTo: "pa-manager",
   },
   {
     key: "pa-partnerships",
@@ -254,7 +254,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "partnerships",
     status: "sleeping",
     company: PA,
-    reportsTo: "group-manager",
+    reportsTo: "pa-manager",
   },
   {
     key: "pa-marketing",
@@ -263,7 +263,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "marketing",
     status: "sleeping",
     company: PA,
-    reportsTo: "group-manager",
+    reportsTo: "pa-manager",
   },
   {
     key: "pa-web-seo",
@@ -282,7 +282,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "research",
     status: "sleeping",
     company: OG,
-    reportsTo: "group-manager",
+    reportsTo: "og-manager",
   },
   {
     key: "og-marketing-meta",
@@ -291,7 +291,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "marketing",
     status: "working",
     company: OG,
-    reportsTo: "group-manager",
+    reportsTo: "og-manager",
   },
   {
     key: "og-sales",
@@ -300,7 +300,7 @@ export const SEED_AGENTS: SeedAgent[] = [
     department: "sales",
     status: "sleeping",
     company: OG,
-    reportsTo: "group-manager",
+    reportsTo: "og-manager",
   },
   {
     key: "og-admissions",
@@ -310,6 +310,34 @@ export const SEED_AGENTS: SeedAgent[] = [
     status: "sleeping",
     company: OG,
     reportsTo: "og-sales",
+  },
+  // COMPANY MANAGERS (Stage 04 hierarchy: Group Manager → Company Manager → specialists)
+  {
+    key: "ept-manager",
+    name: "EPT Company Manager",
+    template: "company_manager",
+    department: "management",
+    status: "sleeping",
+    company: EPT,
+    reportsTo: "group-manager",
+  },
+  {
+    key: "pa-manager",
+    name: "PilotsAssist Company Manager",
+    template: "company_manager",
+    department: "management",
+    status: "sleeping",
+    company: PA,
+    reportsTo: "group-manager",
+  },
+  {
+    key: "og-manager",
+    name: "Opportunitygrad Company Manager",
+    template: "company_manager",
+    department: "management",
+    status: "sleeping",
+    company: OG,
+    reportsTo: "group-manager",
   },
 ];
 

@@ -24,3 +24,15 @@ export function withCompany(href: string, company?: string | null): string {
 export function pct(part: number, whole: number): number {
   return whole > 0 ? Math.min(100, Math.round((part / whole) * 100)) : 0;
 }
+
+/** Date and time for audit-style displays, e.g. "25 Sep 2026, 10:04". */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}

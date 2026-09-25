@@ -320,6 +320,11 @@ export interface DepartmentDefinition {
   name: string;
   description: string;
   color: string;
+  /** Stage 04 defaults (set on first sync; editable afterwards). */
+  mission?: string;
+  instructions?: string[];
+  handoffDestinations?: string[];
+  concurrencyLimit?: number;
 }
 
 /** Global departments. Company-specific departments can be added per company. */
@@ -329,65 +334,132 @@ export const DEFAULT_DEPARTMENTS: readonly DepartmentDefinition[] = [
     name: "Management",
     description: "Direction, planning and coordination",
     color: "#6366f1",
+    mission: "Coordinate work across departments and keep every company on plan.",
+    instructions: [
+      "Delegate specialist work; do not do it yourself",
+      "Consolidate results into one status report",
+    ],
+    handoffDestinations: ["research", "communications", "analytics"],
   },
   {
     slug: "research",
     name: "Research",
     description: "Market, institutional and competitor research",
     color: "#0ea5e9",
+    mission: "Find, verify and structure information once so every team can reuse it.",
+    instructions: [
+      "Check existing knowledge before searching",
+      "Hand verified results to the requesting department",
+    ],
+    handoffDestinations: ["communications", "partnerships", "sales"],
+    concurrencyLimit: 5,
   },
   {
     slug: "partnerships",
     name: "Partnerships",
     description: "Partner discovery and relationships",
     color: "#14b8a6",
+    mission: "Build suitable partnerships that serve company objectives.",
+    instructions: ["Research belongs to Research; outreach drafts belong to Communications"],
+    handoffDestinations: ["research", "communications", "legal"],
   },
   {
     slug: "sales",
     name: "Sales",
     description: "Pipeline, qualification and conversion",
     color: "#f59e0b",
+    mission: "Convert qualified opportunities into revenue within commercial rules.",
+    instructions: ["Follow pricing and discount rules exactly"],
+    handoffDestinations: ["finance", "communications"],
   },
   {
     slug: "revenue",
     name: "Revenue",
     description: "Revenue strategy and optimisation",
     color: "#f97316",
+    mission: "Improve revenue quality and conversion.",
+    instructions: [],
+    handoffDestinations: ["sales", "marketing"],
   },
   {
     slug: "marketing",
     name: "Marketing",
     description: "Campaigns, social, SEO and paid media",
     color: "#ec4899",
+    mission: "Win qualified demand within brand, claims and budget rules.",
+    instructions: ["Never optimise for cheap unqualified leads"],
+    handoffDestinations: ["analytics", "communications"],
   },
   {
     slug: "communications",
     name: "Communications",
     description: "Email and stakeholder communication",
     color: "#8b5cf6",
+    mission: "Communicate professionally from provided, verified context.",
+    instructions: ["Do not restart completed research"],
+    handoffDestinations: ["sales"],
   },
   {
     slug: "technical",
     name: "Technical",
     description: "Websites, infrastructure and software",
     color: "#64748b",
+    mission: "Keep systems, websites and integrations reliable and secure.",
+    instructions: ["Never deploy without approval"],
+    handoffDestinations: ["analytics"],
   },
   {
     slug: "analytics",
     name: "Analytics",
     description: "Reporting, measurement and insight",
     color: "#22c55e",
+    mission: "Measure performance and detect waste.",
+    instructions: [],
+    handoffDestinations: ["management"],
   },
   {
     slug: "legal",
     name: "Legal",
     description: "Legal, compliance and commercial review",
     color: "#a855f7",
+    mission: "Identify legal and commercial risk and propose protections.",
+    instructions: [],
+    handoffDestinations: ["management"],
   },
   {
     slug: "finance",
     name: "Finance",
     description: "Budgets, cost control and finance",
     color: "#84cc16",
+    mission: "Keep spending and payments within policy.",
+    instructions: [],
+    handoffDestinations: ["management"],
+  },
+  {
+    slug: "admissions",
+    name: "Admissions",
+    description: "Applications, admissions and document processing",
+    color: "#06b6d4",
+    mission: "Move applicants through admissions accurately and on time.",
+    instructions: ["Never promise admission or visa outcomes"],
+    handoffDestinations: ["sales", "communications"],
+  },
+  {
+    slug: "website",
+    name: "Website",
+    description: "Website content, SEO and performance",
+    color: "#0f766e",
+    mission: "Keep websites fast, accurate and converting.",
+    instructions: ["Never publish without approval"],
+    handoffDestinations: ["technical", "marketing"],
+  },
+  {
+    slug: "advertising-intelligence",
+    name: "Advertising Intelligence",
+    description: "Ad library, competitor ads and creative intelligence",
+    color: "#db2777",
+    mission: "Turn advertising market signals into reusable intelligence.",
+    instructions: ["Research once and share structured findings with Marketing"],
+    handoffDestinations: ["marketing"],
   },
 ];

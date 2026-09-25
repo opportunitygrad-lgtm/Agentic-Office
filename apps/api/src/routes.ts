@@ -5,6 +5,7 @@ import {
   ForbiddenError,
   NotFoundError,
   agentAuthority,
+  expireTemporaryAgents,
   createAgent,
   createCompany,
   dashboardSummary,
@@ -162,16 +163,19 @@ export const registerRoutes: FastifyPluginAsync = async (app) => {
   app.get("/agents", async (req) => {
     const q = listAgentsQuery.parse(req.query);
     const { company, scope } = await companyScope(req, q.company, "agent.view");
-    return {
-      data: await listAgents(db, {
-        companyId: company?.id,
-        status: q.status,
-        departmentSlug: q.department,
-        provider: q.provider,
-        q: q.q,
-        scope,
-      }),
-    };
+    // Temporary workers past their expiry are retired before listing (no background scheduler yet).
+    await expireTemporaryAgents(db);
+    const list = await listAgents(db, {
+      companyId: company?.id,
+      status: q.status,
+      departmentSlug: q.department,
+      provider: q.provider,
+      q: q.q,
+      teamId: q.team,
+      temporary: q.kind ? q.kind === "temporary" : undefined,
+      scope,
+    });
+    return { data: q.autonomy ? list.filter((a) => a.autonomyLevel === q.autonomy) : list };
   });
 
   app.get("/agents/:id", async (req) => {

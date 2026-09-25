@@ -5,6 +5,7 @@ import { Panel, cn } from "@aibos/ui";
 import { PageError } from "@/components/common/PageError";
 import { PageHeader } from "@/components/common/PageHeader";
 import { TaskList } from "@/components/dashboard/TaskList";
+import { NewTaskButton } from "@/components/workforce/NewTaskButton";
 import { apiGet, companyParam, type SearchParams } from "@/lib/api";
 import { withCompany } from "@/lib/format";
 
@@ -57,6 +58,7 @@ export default async function TasksPage({
         title={`${cfg.label} tasks`}
         description={cfg.description}
         devData={tasks.some((t) => t.origin === "dev_seed")}
+        actions={<NewTaskButton />}
       />
       <nav
         aria-label="Task views"

@@ -6,13 +6,16 @@ import { Bot, Search } from "lucide-react";
 import {
   AGENT_STATUSES,
   AUTONOMY_LABELS,
+  AUTONOMY_LEVELS,
   APPROVAL_TYPE_LABELS,
+  CAPABILITY_LABELS,
   PROVIDER_LABELS,
   formatUsd,
   titleCase,
   type AgentDTO,
   type AgentStatus,
   type ApprovalType,
+  type AutonomyLevel,
   type ProviderType,
 } from "@aibos/shared";
 import { AGENT_STATUS_META, EmptyState, MockBadge, StatusDot, StatusPill, cn } from "@aibos/ui";
@@ -25,15 +28,30 @@ export interface AgentFilterState {
   status: AgentStatus | "all";
   department: string;
   provider: ProviderType | "all";
+  company?: string;
+  team?: string;
+  autonomy?: AutonomyLevel | "all";
+  kind?: "all" | "permanent" | "temporary";
 }
 
 export function filterAgents(agents: AgentDTO[], f: AgentFilterState): AgentDTO[] {
   const q = f.q.trim().toLowerCase();
+  const company = f.company ?? "all";
+  const team = f.team ?? "all";
+  const autonomy = f.autonomy ?? "all";
+  const kind = f.kind ?? "all";
   return agents.filter(
     (a) =>
       (f.status === "all" || a.status === f.status) &&
       (f.department === "all" || a.department?.slug === f.department) &&
       (f.provider === "all" || a.primaryProvider === f.provider) &&
+      (company === "all" ||
+        (company === "global"
+          ? a.scope === "global"
+          : a.companies.some((c) => c.slug === company))) &&
+      (team === "all" || a.teams.some((t) => t.id === team)) &&
+      (autonomy === "all" || a.autonomyLevel === autonomy) &&
+      (kind === "all" || (kind === "temporary") === a.isTemporary) &&
       (!q ||
         a.name.toLowerCase().includes(q) ||
         (a.description ?? "").toLowerCase().includes(q) ||
@@ -58,6 +76,10 @@ export function AgentRegistry({
     status: initialStatus ?? "all",
     department: "all",
     provider: "all",
+    company: "all",
+    team: "all",
+    autonomy: "all",
+    kind: "all",
   });
   const [selected, setSelected] = useState<AgentDTO | null>(
     () => agents.find((a) => a.id === focusId) ?? null,
@@ -66,6 +88,16 @@ export function AgentRegistry({
   const departments = useMemo(() => {
     const m = new Map<string, string>();
     for (const a of agents) if (a.department) m.set(a.department.slug, a.department.name);
+    return [...m.entries()].sort((x, y) => x[1].localeCompare(y[1]));
+  }, [agents]);
+  const companies = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agents) for (const c of a.companies) m.set(c.slug, c.name);
+    return [...m.entries()].sort((x, y) => x[1].localeCompare(y[1]));
+  }, [agents]);
+  const teams = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of agents) for (const t of a.teams) m.set(t.id, t.name);
     return [...m.entries()].sort((x, y) => x[1].localeCompare(y[1]));
   }, [agents]);
   const statusCounts = useMemo(() => {
@@ -106,6 +138,58 @@ export function AgentRegistry({
                 {name}
               </option>
             ))}
+          </select>
+          <select
+            aria-label="Filter by company"
+            className={selectCls}
+            value={filters.company}
+            onChange={(e) => update({ company: e.target.value })}
+          >
+            <option value="all">All companies</option>
+            <option value="global">Global agents</option>
+            {companies.map(([slug, name]) => (
+              <option key={slug} value={slug}>
+                {name}
+              </option>
+            ))}
+          </select>
+          {teams.length > 0 && (
+            <select
+              aria-label="Filter by team"
+              className={selectCls}
+              value={filters.team}
+              onChange={(e) => update({ team: e.target.value })}
+            >
+              <option value="all">All teams</option>
+              {teams.map(([id, name]) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
+          <select
+            aria-label="Filter by autonomy"
+            className={selectCls}
+            value={filters.autonomy}
+            onChange={(e) => update({ autonomy: e.target.value as AgentFilterState["autonomy"] })}
+          >
+            <option value="all">Any autonomy</option>
+            {AUTONOMY_LEVELS.map((l) => (
+              <option key={l} value={l}>
+                {AUTONOMY_LABELS[l]}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by lifecycle"
+            className={selectCls}
+            value={filters.kind}
+            onChange={(e) => update({ kind: e.target.value as AgentFilterState["kind"] })}
+          >
+            <option value="all">Permanent & temporary</option>
+            <option value="permanent">Permanent</option>
+            <option value="temporary">Temporary</option>
           </select>
           <select
             aria-label="Filter by provider"
@@ -160,13 +244,15 @@ export function AgentRegistry({
       ) : (
         <>
           <div
-            className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_110px] gap-x-4 border-b border-line px-5 py-2 text-[11px] font-medium text-fg-faint lg:grid"
+            className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)_110px] gap-x-4 border-b border-line px-5 py-2 text-[11px] font-medium text-fg-faint lg:grid"
             aria-hidden="true"
           >
             <span>Agent</span>
             <span>Status</span>
             <span>Companies</span>
+            <span>Team</span>
             <span>Current task</span>
+            <span>Workload</span>
             <span className="text-right">Provider</span>
           </div>
           <ul className="divide-y divide-line/70" aria-label="Agents">
@@ -177,7 +263,7 @@ export function AgentRegistry({
                   <button
                     type="button"
                     onClick={() => setSelected(a)}
-                    className="focus-ring grid w-full grid-cols-1 gap-x-4 gap-y-2 px-4 py-3 text-left transition-colors hover:bg-surface-2/60 sm:px-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_110px] lg:items-center"
+                    className="focus-ring grid w-full grid-cols-1 gap-x-4 gap-y-2 px-4 py-3 text-left transition-colors hover:bg-surface-2/60 sm:px-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)_110px] lg:items-center"
                   >
                     <span className="min-w-0">
                       <span
@@ -188,7 +274,7 @@ export function AgentRegistry({
                       </span>
                       <span className="block truncate text-[11.5px] text-fg-faint">
                         {a.department?.name ?? "Unassigned"} · {AUTONOMY_LABELS[a.autonomyLevel]}
-                        {a.isTemporary && " · Temporary"}
+                        {a.isTemporary ? " · Temporary" : " · Permanent"}
                       </span>
                     </span>
                     <span>
@@ -198,7 +284,19 @@ export function AgentRegistry({
                       <AgentCompanies agent={a} />
                     </span>
                     <span className="min-w-0 truncate text-[12.5px] text-fg-muted">
+                      {a.teams.map((t) => t.name).join(", ") || "—"}
+                    </span>
+                    <span className="min-w-0 truncate text-[12.5px] text-fg-muted">
                       {a.currentTask?.title ?? "—"}
+                    </span>
+                    <span
+                      className="num text-[12px] text-fg-muted"
+                      title="Active / capacity (queued)"
+                    >
+                      {a.workload.active}/{a.workload.capacity}
+                      {a.workload.queued > 0 && (
+                        <span className="text-fg-faint"> · {a.workload.queued} queued</span>
+                      )}
                     </span>
                     <span className="lg:text-right">
                       <ProviderTag provider={a.primaryProvider} />
@@ -257,6 +355,9 @@ function AgentDetail({ agent: a }: { agent: AgentDTO }) {
     ["Scope", a.scope === "global" ? "Global (all companies)" : "Company"],
     ["Department", a.department?.name ?? "—"],
     ["Reports to", a.reportsTo?.name ?? "—"],
+    ["Escalates to", a.escalationAgent?.name ?? "—"],
+    ["Teams", a.teams.map((t) => t.name).join(", ") || "—"],
+    ["Role version", a.roleVersion ? `v${a.roleVersion}` : "Template"],
     ["Lifecycle", a.isTemporary ? "Temporary" : "Permanent"],
     ["Primary provider", PROVIDER_LABELS[a.primaryProvider]],
     ["Fallback", a.fallbackProvider ? PROVIDER_LABELS[a.fallbackProvider] : "—"],
@@ -280,7 +381,7 @@ function AgentDetail({ agent: a }: { agent: AgentDTO }) {
           href={`/workforce/agents/${a.id}`}
           className="focus-ring inline-flex h-8 items-center rounded-lg bg-accent px-3 text-[13px] font-medium text-white hover:bg-accent-strong"
         >
-          Open agent · Context preview
+          Open agent · Role, instructions & context
         </Link>
       </div>
       <Section title="Access & Authority">
@@ -320,6 +421,9 @@ function AgentDetail({ agent: a }: { agent: AgentDTO }) {
             {a.scope === "global" ? "Serves every company as a global agent." : "Not assigned."}
           </p>
         )}
+      </Section>
+      <Section title="Capabilities">
+        <Chips items={a.capabilities.map((c) => CAPABILITY_LABELS[c] ?? c)} />
       </Section>
       <Section title="Responsibilities">
         <Chips items={a.responsibilities} />

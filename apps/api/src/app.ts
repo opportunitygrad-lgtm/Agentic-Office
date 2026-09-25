@@ -17,6 +17,7 @@ import type { SecurityDelivery } from "./delivery";
 import type { HealthProbe } from "./health";
 import { registerRoutes } from "./routes";
 import { knowledgeRoutes } from "./knowledge-routes";
+import { workforceRoutes } from "./workforce-routes";
 import { TooManyRequestsError, UnauthorizedError, securityPlugin } from "./security";
 import { MemoryThrottle, type ThrottleStore } from "./throttle";
 
@@ -129,6 +130,7 @@ export async function buildApp(input: AppDeps): Promise<FastifyInstance> {
   await app.register(adminRoutes, { prefix: "/v1" });
   await app.register(registerRoutes, { prefix: "/v1" });
   await app.register(knowledgeRoutes, { prefix: "/v1" });
+  await app.register(workforceRoutes, { prefix: "/v1" });
 
   // Public liveness. Production exposes only the overall status.
   app.get("/health", async () => {

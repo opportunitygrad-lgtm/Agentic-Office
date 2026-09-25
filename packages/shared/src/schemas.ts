@@ -278,6 +278,10 @@ export const listAgentsQuery = companyScopeQuery.extend({
   department: z.string().trim().max(64).optional(),
   provider: z.enum(PROVIDER_TYPES).optional(),
   q: z.string().trim().max(120).optional(),
+  team: uuidSchema.optional(),
+  autonomy: z.enum(AUTONOMY_LEVELS).optional(),
+  /** "permanent" | "temporary" — omitted shows both. */
+  kind: z.enum(["permanent", "temporary"]).optional(),
 });
 
 export const listTasksQuery = companyScopeQuery.extend({

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@aibos/access-core": "workspace:*",
+    "@aibos/agent-core": "workspace:*",
     "@aibos/browser-core": "workspace:*",
     "@aibos/db": "workspace:*",
     "@aibos/shared": "workspace:*",

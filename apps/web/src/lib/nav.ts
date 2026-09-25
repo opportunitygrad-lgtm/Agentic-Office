@@ -59,8 +59,9 @@ export const NAV: NavGroup[] = [
         permission: "agent.view",
         children: [
           { label: "Agents", href: "/workforce/agents" },
+          { label: "Organisation Chart", href: "/workforce/organisation", permission: "team.view" },
+          { label: "Teams / Departments", href: "/workforce/teams", permission: "team.view" },
           { label: "Agent Templates", href: "/workforce/templates" },
-          { label: "Teams / Departments", href: "/workforce/teams" },
         ],
       },
       {

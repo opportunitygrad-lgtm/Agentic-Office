@@ -6,3 +6,6 @@ export * from "./auth-schemas";
 export * from "./knowledge";
 export * from "./knowledge-schemas";
 export * from "./knowledge-dto";
+export * from "./workforce";
+export * from "./workforce-schemas";
+export * from "./workforce-dto";

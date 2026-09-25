@@ -40,6 +40,9 @@ export const AGENT_STATUSES = [
   "failed",
   "completed",
   "offline",
+  /* Stage 04: temporary-agent terminal states. "failed" is displayed as ERROR. */
+  "expired",
+  "terminated",
 ] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 

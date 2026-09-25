@@ -26,6 +26,7 @@ export interface TaskFilters {
   agentId?: string;
   rootTaskId?: string;
   ids?: string[];
+  teamId?: string;
   limit?: number;
   scope?: AccessScope;
 }
@@ -41,6 +42,7 @@ export async function listTasks(db: Database, filters: TaskFilters = {}): Promis
   if (filters.agentId) where.push(eq(tasks.assignedAgentId, filters.agentId));
   if (filters.rootTaskId) where.push(eq(tasks.rootTaskId, filters.rootTaskId));
   if (filters.ids?.length) where.push(inArray(tasks.id, filters.ids));
+  if (filters.teamId) where.push(eq(tasks.teamId, filters.teamId));
   const scope = filters.scope ?? FULL_SCOPE;
   const scoped = scopeWhere(tasks.companyId, scope);
   if (scoped) where.push(scoped);

@@ -7,6 +7,7 @@ import { PageError } from "@/components/common/PageError";
 import { Unauthorised } from "@/components/common/Unauthorised";
 import { ContextPreview } from "@/components/context/ContextPreview";
 import { TaskList } from "@/components/dashboard/TaskList";
+import { TaskWorkforcePanel } from "@/components/workforce/TaskWorkforcePanel";
 import { apiGet, apiTry } from "@/lib/api";
 
 export const metadata = { title: "Task detail" };
@@ -62,6 +63,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         <Panel title="Task hierarchy" className="mb-5" bodyClassName="p-0">
           <TaskList tasks={tree} hierarchical emptyTitle="No related tasks" />
         </Panel>
+      )}
+      {task.company && (
+        <section aria-labelledby="workforce-heading" className="mb-6">
+          <h2 id="workforce-heading" className="mb-3 text-[16px] font-semibold tracking-tight">
+            Delegation & assignment
+          </h2>
+          <TaskWorkforcePanel taskId={task.id} />
+        </section>
       )}
       <h2 className="mb-1 text-[16px] font-semibold tracking-tight">Agent context</h2>
       <p className="mb-3 text-[13px] text-fg-muted">

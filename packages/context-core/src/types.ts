@@ -173,6 +173,21 @@ export interface ContextSources {
   } | null;
   knowledge: KnowledgeCandidate[];
   links: { knowledgeId: string; target: "task" | "agent" }[];
+  /** Handoff packets for this task addressed to this agent (already company-checked). */
+  handoffs?: {
+    id: string;
+    companyId: string;
+    from: string;
+    type: string;
+    objective: string;
+    summary: string;
+    verifiedFacts: string[];
+    sourceReferences: string[];
+    actionRequired: string;
+    doNotResearchAgainUnless: string[];
+    knowledgeIds: string[];
+    status: string;
+  }[];
   accessPolicies: AccessPolicySnapshot[];
   rules: RuleCandidate[];
 }

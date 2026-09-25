@@ -297,6 +297,20 @@ export function assembleContextPack(
     });
   }
 
+  /* ---------- handoffs (prior work — reuse, do not repeat) ---------- */
+  const handoffs = (src.handoffs ?? []).filter((h) => {
+    if (h.companyId === companyId) return true;
+    blockedCrossCompany++;
+    excluded.push({
+      id: h.id,
+      title: null,
+      kind: "knowledge",
+      reason: "other_company",
+      detail: "Handoff from another company — never shared",
+    });
+    return false;
+  });
+
   /* ---------- knowledge ---------- */
   const taskLinked = new Set(
     src.links.filter((l) => l.target === "task").map((l) => l.knowledgeId),
@@ -317,6 +331,7 @@ export function assembleContextPack(
     taskLinked,
     agentLinked,
     explicitIds: new Set(request.explicitKnowledgeIds ?? []),
+    handoffLinked: new Set(handoffs.flatMap((h) => h.knowledgeIds)),
   };
   const maxSensitivity = agentMaxSensitivity(src.agent, src.accessPolicies);
   const knowledge: ContextKnowledgeEntry[] = [];
@@ -397,7 +412,9 @@ export function assembleContextPack(
       item.verificationStatus === "verified" || item.verificationStatus === "management_confirmed";
     const priority = isUnverified
       ? PRIORITY.unverified
-      : rel.reasons.includes("task_link") || rel.reasons.includes("explicit_request")
+      : rel.reasons.includes("task_link") ||
+          rel.reasons.includes("explicit_request") ||
+          rel.reasons.includes("handoff_link")
         ? PRIORITY.linkedKnowledge
         : rel.reasons.includes("agent_link")
           ? PRIORITY.agentLinkedKnowledge
@@ -492,6 +509,7 @@ export function assembleContextPack(
     rules: { brand, commercial, compliance, aiPolicy: aiPolicyLines },
     knowledge,
     unverified,
+    handoffs: handoffs.map(({ companyId: _c, ...h }) => h),
     prohibitedActions,
     requiredApprovals,
     excluded,

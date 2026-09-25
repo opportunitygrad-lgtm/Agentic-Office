@@ -4,7 +4,7 @@
  * origin='dev_seed' rows (except companies, which are upserted) are replaced.
  */
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { getAgentTemplate } from "@aibos/agent-core";
+import { TEMPLATE_CAPABILITIES, getAgentTemplate } from "@aibos/agent-core";
 import { INTEGRATION_CATALOG } from "@aibos/integration-core";
 import { PROVIDER_TYPES } from "@aibos/shared";
 import type { Database } from "../../client";
@@ -41,6 +41,7 @@ import { hashPassword } from "../../auth/crypto";
 import { applyTemplateGrants } from "../../repositories/agent-authority";
 import { serviceActor } from "../../repositories/util";
 import { clearKnowledgeSeed, seedKnowledge } from "./seed-knowledge";
+import { clearWorkforceSeed, seedWorkforce } from "./seed-workforce";
 
 const SEED_ACTOR = serviceActor("dev-seed");
 const ORIGIN = "dev_seed" as const;
@@ -58,6 +59,7 @@ function mulberry32(seed: number) {
 
 export async function clearDevSeed(db: Database): Promise<void> {
   await clearKnowledgeSeed(db);
+  await clearWorkforceSeed(db);
   await db.delete(aiUsageRecords).where(eq(aiUsageRecords.origin, ORIGIN));
   await db.delete(auditEvents).where(eq(auditEvents.origin, ORIGIN));
   await db.delete(approvals).where(eq(approvals.origin, ORIGIN));
@@ -110,6 +112,7 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
         prohibitedActions: tpl.prohibitedActions,
         allowedTools: tpl.defaultTools,
         approvalRequirements: tpl.approvalRequirements,
+        capabilities: TEMPLATE_CAPABILITIES[a.template],
         readPermissions: a.company ? [`company:${a.company}:read`] : ["company:*:read"],
         writePermissions: [],
         concurrencyLimit: a.company ? 1 : 3,
@@ -398,6 +401,8 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
     approverId: ownerId,
   });
 
+  const workforceCounts = await seedWorkforce(db, { now, companyIds, agentIds, taskIds, ownerId });
+
   const [counts] = await db.execute<{
     agents: number;
     tasks: number;
@@ -409,6 +414,6 @@ export async function seedDev(db: Database, now = new Date()): Promise<Record<st
     select (select count(*)::int from ${users}) as users, (select count(*)::int from ${agents}) as agents, (select count(*)::int from ${tasks}) as tasks,
            (select count(*)::int from ${approvals}) as approvals, (select count(*)::int from ${auditEvents}) as events,
            (select count(*)::int from ${aiUsageRecords}) as usage`);
-  return { companies: companyIds.size, ...(counts ?? {}), ...knowledgeCounts };
+  return { companies: companyIds.size, ...(counts ?? {}), ...knowledgeCounts, ...workforceCounts };
 }
 export { DEV_SEED_PASSWORD, SEED_USERS } from "./data";

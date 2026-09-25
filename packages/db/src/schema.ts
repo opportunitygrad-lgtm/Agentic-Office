@@ -66,6 +66,11 @@ import {
   SENSITIVITY_LEVELS,
   STALE_KNOWLEDGE_POLICIES,
   VERIFICATION_STATUSES,
+  AGENT_MESSAGE_TYPES,
+  CONVERSATION_STATUSES,
+  DELEGATION_OUTCOMES,
+  HANDOFF_STATUSES,
+  HANDOFF_TYPES,
 } from "@aibos/shared";
 
 /* ---------- enums (sourced from @aibos/shared) ---------- */
@@ -116,6 +121,11 @@ export const rulePeriod = pgEnum("rule_period", RULE_PERIODS);
 export const complianceEffect = pgEnum("compliance_effect", COMPLIANCE_EFFECTS);
 export const aiPolicyMode = pgEnum("ai_policy_mode", AI_POLICY_MODES);
 export const staleKnowledgePolicy = pgEnum("stale_knowledge_policy", STALE_KNOWLEDGE_POLICIES);
+export const delegationOutcome = pgEnum("delegation_outcome", DELEGATION_OUTCOMES);
+export const handoffStatus = pgEnum("handoff_status", HANDOFF_STATUSES);
+export const handoffType = pgEnum("handoff_type", HANDOFF_TYPES);
+export const agentMessageType = pgEnum("agent_message_type", AGENT_MESSAGE_TYPES);
+export const conversationStatus = pgEnum("conversation_status", CONVERSATION_STATUSES);
 
 /* ---------- shared column helpers ---------- */
 
@@ -218,6 +228,21 @@ export const departments = pgTable(
     slug: text("slug").notNull(),
     description: text("description"),
     color: text("color"),
+    /* Stage 04 department model */
+    mission: text("mission"),
+    managerAgentId: uuid("manager_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    humanManagerUserId: uuid("human_manager_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    defaultProvider: providerType("default_provider"),
+    concurrencyLimit: integer("concurrency_limit"),
+    dailyBudgetUsd: usd("daily_budget_usd"),
+    active: boolean("active").notNull().default(true),
+    instructions: textList("instructions"),
+    allowedTaskTypes: textList("allowed_task_types"),
+    handoffDestinations: textList("handoff_destinations"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -239,6 +264,8 @@ export const agentTemplates = pgTable("agent_templates", {
   prohibitedActions: textList("prohibited_actions"),
   approvalRequirements: textList("approval_requirements"),
   capabilities: textList("capabilities"),
+  /** Stage 04 agent capabilities (what the role is good at; not permissions). */
+  agentCapabilities: textList("agent_capabilities"),
   /** Future (Stage 05): pointer to a versioned prompt in the prompt library. */
   promptVersion: text("prompt_version"),
   definition: jsonb("definition").$type<Record<string, unknown>>().notNull().default({}),
@@ -284,6 +311,27 @@ export const agents = pgTable(
     isTemporary: boolean("is_temporary").notNull().default(false),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
+    /* Stage 04 workforce model */
+    capabilities: textList("capabilities"),
+    escalationAgentId: uuid("escalation_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    fallbackManagerId: uuid("fallback_manager_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    roleTemplateId: uuid("role_template_id").references((): AnyPgColumn => roleTemplates.id, {
+      onDelete: "set null",
+    }),
+    /** Temporary workers: the agent that owns them and the task they are bound to. */
+    parentAgentId: uuid("parent_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    boundTaskId: uuid("bound_task_id").references((): AnyPgColumn => tasks.id, {
+      onDelete: "set null",
+    }),
+    purpose: text("purpose"),
+    maySpawnTemporary: boolean("may_spawn_temporary").notNull().default(false),
+    terminatedAt: timestamp("terminated_at", { withTimezone: true }),
     origin: origin(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -350,6 +398,41 @@ export const tasks = pgTable(
     requiresApproval: boolean("requires_approval").notNull().default(false),
     /** Stage 03: the task may use clearly-labelled UNVERIFIED research as context. */
     allowUnverifiedContext: boolean("allow_unverified_context").notNull().default(false),
+    /* Stage 04: requirements, routing, delegation and claiming */
+    requiredCapabilities: textList("required_capabilities"),
+    preferredDepartmentId: uuid("preferred_department_id").references(() => departments.id, {
+      onDelete: "set null",
+    }),
+    preferredAgentId: uuid("preferred_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    preferredTeamId: uuid("preferred_team_id").references((): AnyPgColumn => teams.id, {
+      onDelete: "set null",
+    }),
+    providerPreference: providerType("provider_preference"),
+    maxBudget: usd("max_budget"),
+    maxConcurrency: integer("max_concurrency"),
+    delegationAllowed: boolean("delegation_allowed").notNull().default(true),
+    parallelAllowed: boolean("parallel_allowed").notNull().default(false),
+    externalActionAllowed: boolean("external_action_allowed").notNull().default(false),
+    approvalRequirements: textList("approval_requirements"),
+    resultSchema: text("result_schema"),
+    stoppingCondition: text("stopping_condition"),
+    expectedOutcome: text("expected_outcome"),
+    targetEntity: text("target_entity"),
+    workItems: integer("work_items"),
+    normalizedObjective: text("normalized_objective"),
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+    teamId: uuid("team_id").references((): AnyPgColumn => teams.id, { onDelete: "set null" }),
+    delegationDepth: integer("delegation_depth").notNull().default(0),
+    delegatedFromAgentId: uuid("delegated_from_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    claimedByAgentId: uuid("claimed_by_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     dueAt: timestamp("due_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -364,6 +447,8 @@ export const tasks = pgTable(
     index("tasks_agent_idx").on(t.assignedAgentId),
     index("tasks_parent_idx").on(t.parentTaskId),
     index("tasks_root_idx").on(t.rootTaskId),
+    index("tasks_objective_idx").on(t.companyId, t.normalizedObjective),
+    index("tasks_claim_idx").on(t.claimedByAgentId),
     check("tasks_progress_range", sql`${t.progress} BETWEEN 0 AND 100`),
   ],
 );
@@ -1009,6 +1094,291 @@ export const agentKnowledgeProfiles = pgTable("agent_knowledge_profiles", {
   updatedAt: updatedAt(),
 });
 
+/* ---------- workforce (Stage 04) ---------- */
+
+/** Singleton (id = 1) workforce policy: concurrency, delegation and temp-agent limits. */
+export const workforcePolicy = pgTable(
+  "workforce_policy",
+  {
+    id: integer("id").primaryKey().default(1),
+    globalActiveAgentLimit: integer("global_active_agent_limit").notNull().default(3),
+    maxDelegationDepth: integer("max_delegation_depth").notNull().default(3),
+    highCostTaskThresholdUsd: usd("high_cost_task_threshold_usd").notNull().default(5),
+    tempAgentMaxExpiryHours: integer("temp_agent_max_expiry_hours").notNull().default(168),
+    tempAgentApprovalBudgetUsd: usd("temp_agent_approval_budget_usd").notNull().default(2),
+    maxActiveTempAgentsPerCompany: integer("max_active_temp_agents_per_company")
+      .notNull()
+      .default(10),
+    updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [check("workforce_policy_singleton", sql`${t.id} = 1`)],
+);
+
+/** Editable role templates (company-specific specialists extend a base template). */
+export const roleTemplates = pgTable(
+  "role_templates",
+  {
+    id: id(),
+    key: text("key").notNull(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    baseTemplateKey: text("base_template_key")
+      .notNull()
+      .references(() => agentTemplates.key),
+    name: text("name").notNull(),
+    departmentSlug: text("department_slug").notNull(),
+    capabilities: textList("capabilities"),
+    /** Structured role (agentRoleSchema). */
+    role: jsonb("role").$type<Record<string, unknown>>().notNull(),
+    updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [unique("role_templates_key_uq").on(t.companyId, t.key).nullsNotDistinct()],
+);
+
+/** Versioned permanent agent roles; exactly one current version per agent. */
+export const agentRoleVersions = pgTable(
+  "agent_role_versions",
+  {
+    id: id(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    role: jsonb("role").$type<Record<string, unknown>>().notNull(),
+    changeSummary: text("change_summary").notNull(),
+    material: boolean("material").notNull().default(true),
+    isCurrent: boolean("is_current").notNull().default(true),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull().defaultNow(),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    approvedByUserId: uuid("approved_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("agent_role_versions_uq").on(t.agentId, t.version),
+    uniqueIndex("agent_role_current_uq")
+      .on(t.agentId)
+      .where(sql`is_current`),
+  ],
+);
+
+export const teams = pgTable(
+  "teams",
+  {
+    id: id(),
+    /** NULL = GLOBAL team. */
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    purpose: text("purpose"),
+    leaderAgentId: uuid("leader_agent_id").references((): AnyPgColumn => agents.id, {
+      onDelete: "set null",
+    }),
+    concurrencyLimit: integer("concurrency_limit").notNull().default(3),
+    defaultTaskTypes: textList("default_task_types"),
+    active: boolean("active").notNull().default(true),
+    isTemporary: boolean("is_temporary").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("teams_company_slug_uq").on(t.companyId, t.slug).nullsNotDistinct(),
+    check("teams_concurrency_range", sql`${t.concurrencyLimit} BETWEEN 1 AND 100`),
+  ],
+);
+
+export const teamMembers = pgTable(
+  "team_members",
+  {
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.teamId, t.agentId] }),
+    index("team_members_agent_idx").on(t.agentId),
+  ],
+);
+
+/** Every delegation / assignment decision, with its explanation. */
+export const taskDelegations = pgTable(
+  "task_delegations",
+  {
+    id: id(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    fromAgentId: uuid("from_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    toAgentId: uuid("to_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    toTeamId: uuid("to_team_id").references(() => teams.id, { onDelete: "set null" }),
+    outcome: delegationOutcome("outcome").notNull(),
+    /** true when a person chose a target other than the recommendation. */
+    override: boolean("override").notNull().default(false),
+    reason: text("reason"),
+    explanation: jsonb("explanation").$type<string[]>().notNull().default([]),
+    decidedByUserId: uuid("decided_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    origin: origin(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("task_delegations_task_idx").on(t.taskId),
+    index("task_delegations_company_idx").on(t.companyId, t.createdAt),
+  ],
+);
+
+export const handoffs = pgTable(
+  "handoffs",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    sourceAgentId: uuid("source_agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    toAgentId: uuid("to_agent_id").references(() => agents.id, { onDelete: "cascade" }),
+    toTeamId: uuid("to_team_id").references(() => teams.id, { onDelete: "cascade" }),
+    toDepartmentId: uuid("to_department_id").references(() => departments.id, {
+      onDelete: "cascade",
+    }),
+    type: handoffType("type").notNull().default("work_transfer"),
+    objective: text("objective").notNull(),
+    summary: text("summary").notNull(),
+    verifiedFacts: textList("verified_facts"),
+    sourceReferences: textList("source_references"),
+    knowledgeIds: uuid("knowledge_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    contactReference: text("contact_reference"),
+    actionRequired: text("action_required").notNull(),
+    priority: taskPriority("priority").notNull().default("normal"),
+    deadline: timestamp("deadline", { withTimezone: true }),
+    doNotResearchAgainUnless: textList("do_not_research_again_unless"),
+    status: handoffStatus("status").notNull().default("pending"),
+    note: text("note"),
+    createdByUserId: uuid("created_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index("handoffs_task_idx").on(t.taskId),
+    index("handoffs_to_agent_idx").on(t.toAgentId, t.status),
+    check(
+      "handoffs_one_destination",
+      sql`num_nonnulls(${t.toAgentId}, ${t.toTeamId}, ${t.toDepartmentId}) = 1`,
+    ),
+  ],
+);
+
+/** Internal agent messages (manager instructions, requests, status, escalations). */
+export const agentMessages = pgTable(
+  "agent_messages",
+  {
+    id: id(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    senderType: actorType("sender_type").notNull(),
+    senderAgentId: uuid("sender_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    senderUserId: uuid("sender_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    senderServiceId: text("sender_service_id"),
+    recipientAgentId: uuid("recipient_agent_id").references(() => agents.id, {
+      onDelete: "cascade",
+    }),
+    recipientTeamId: uuid("recipient_team_id").references(() => teams.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+    type: agentMessageType("type").notNull(),
+    content: text("content").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    origin: origin(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("agent_messages_recipient_idx").on(t.recipientAgentId, t.createdAt),
+    index("agent_messages_task_idx").on(t.taskId),
+    check(
+      "agent_messages_one_recipient",
+      sql`num_nonnulls(${t.recipientAgentId}, ${t.recipientTeamId}) = 1`,
+    ),
+  ],
+);
+
+/** Direct human ↔ agent conversation (Stage 04 foundation; no AI replies yet). */
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: id(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    title: text("title"),
+    status: conversationStatus("status").notNull().default("open"),
+    origin: origin(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("conversations_user_idx").on(t.userId, t.agentId)],
+);
+
+export const conversationMessages = pgTable(
+  "conversation_messages",
+  {
+    id: id(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    authorUserId: uuid("author_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    content: text("content").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("conversation_messages_idx").on(t.conversationId, t.createdAt),
+    check("conversation_messages_role", sql`${t.role} in ('human', 'agent', 'system')`),
+  ],
+);
+
 /* ---------- relations (for relational queries) ---------- */
 
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -1074,3 +1444,7 @@ export type BrandRule = typeof brandRules.$inferSelect;
 export type CommercialRule = typeof commercialRules.$inferSelect;
 export type ComplianceRule = typeof complianceRules.$inferSelect;
 export type CompanyAiPolicy = typeof companyAiPolicies.$inferSelect;
+export type Team = typeof teams.$inferSelect;
+export type Handoff = typeof handoffs.$inferSelect;
+export type RoleTemplate = typeof roleTemplates.$inferSelect;
+export type AgentRoleVersion = typeof agentRoleVersions.$inferSelect;

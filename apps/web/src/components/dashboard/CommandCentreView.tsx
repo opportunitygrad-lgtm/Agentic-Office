@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowRight, Plus } from "lucide-react";
-import type { DashboardSummaryDTO, LiveSessionDTO } from "@aibos/shared";
+import type { DashboardSummaryDTO, LiveSessionDTO, ManagerStatsDTO } from "@aibos/shared";
 import { EmptyState, MockBadge, Panel } from "@aibos/ui";
 import { withCompany } from "@/lib/format";
 import { PageHeader } from "../common/PageHeader";
@@ -13,6 +13,7 @@ import { CompanyCards } from "./CompanyCards";
 import { TaskList } from "./TaskList";
 import { UsagePanel } from "./UsagePanel";
 import { WorkforceOverview } from "./WorkforceOverview";
+import { ManagerStatsPanel } from "../workforce/ManagerStatsPanel";
 
 function PanelLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
@@ -28,9 +29,11 @@ function PanelLink({ href, children }: { href: string; children: React.ReactNode
 export function CommandCentreView({
   summary,
   sessions,
+  managerStats,
 }: {
   summary: DashboardSummaryDTO;
   sessions: LiveSessionDTO[];
+  managerStats?: ManagerStatsDTO | null;
 }) {
   const scope = summary.scope;
   const slug = scope?.slug;
@@ -86,6 +89,7 @@ export function CommandCentreView({
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12 xl:items-start">
         <div className="min-w-0 space-y-4 xl:col-span-8">
           <WorkforceOverview workforce={summary.workforce} company={slug} />
+          {managerStats && <ManagerStatsPanel stats={managerStats} />}
           <Panel
             id="active-agents"
             title="Active agents"

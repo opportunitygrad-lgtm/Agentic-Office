@@ -22,6 +22,7 @@ export const TEMPLATE_GRANTS: Record<AgentTemplateKey, Record<string, TemplateGr
     "tool.meta.read": "allow",
     "tool.files.write": "allow",
     "action.external_send": "require_approval",
+    "action.create_temp_worker": "require_approval",
   },
   research: {
     ...BASE,
@@ -29,6 +30,7 @@ export const TEMPLATE_GRANTS: Record<AgentTemplateKey, Record<string, TemplateGr
     "tool.google_sheets.read": "allow",
     "tool.google_sheets.write": "allow",
     "action.deep_research": "require_approval",
+    "action.create_temp_worker": "require_approval",
   },
   sales_cro: {
     ...BASE,
