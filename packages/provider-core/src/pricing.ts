@@ -1,21 +1,50 @@
-import type { ProviderType } from "@aibos/shared";
+import type { CostEstimate, ModelPrice, ProviderUsage } from "./types";
 
 /**
- * PLACEHOLDER pricing (USD per 1M tokens) used only for development estimates.
- * Stage 11 (Cost Governor) replaces this with a maintained, dated price table.
+ * Local token estimate (~4 characters per token). Used for pre-flight cost
+ * estimates so no provider request is spent just counting tokens; the
+ * provider-reported usage is authoritative after the call.
  */
-export const PLACEHOLDER_PRICING: Record<ProviderType, { input: number; output: number }> = {
-  CLAUDE: { input: 3, output: 15 },
-  OPENAI: { input: 2.5, output: 10 },
-  GROK: { input: 3, output: 15 },
-  LOCAL: { input: 0, output: 0 },
-};
-
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-export function priceTokens(provider: ProviderType, input: number, output: number): number {
-  const p = PLACEHOLDER_PRICING[provider];
-  return Number(((input * p.input + output * p.output) / 1_000_000).toFixed(6));
+const round = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
+
+export function estimateCost(
+  price: ModelPrice | null,
+  input: {
+    provider: ModelPrice["provider"];
+    model: string;
+    inputTokens: number;
+    maxOutputTokens: number;
+  },
+): CostEstimate {
+  const costUsd = price
+    ? round(
+        (input.inputTokens * price.inputPerMTok + input.maxOutputTokens * price.outputPerMTok) /
+          1_000_000,
+      )
+    : 0;
+  return {
+    provider: input.provider,
+    model: input.model,
+    inputTokens: input.inputTokens,
+    outputTokens: input.maxOutputTokens,
+    costUsd,
+  };
+}
+
+/**
+ * Actual cost from provider usage and the price snapshot in force when the
+ * call ran. `inputTokens` excludes cache reads/writes (provider semantics).
+ */
+export function costOfUsage(price: ModelPrice, usage: ProviderUsage): number {
+  return round(
+    (usage.inputTokens * price.inputPerMTok +
+      usage.outputTokens * price.outputPerMTok +
+      usage.cacheCreationTokens * price.cacheWritePerMTok +
+      usage.cacheReadTokens * price.cacheReadPerMTok) /
+      1_000_000,
+  );
 }

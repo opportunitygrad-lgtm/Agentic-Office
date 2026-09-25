@@ -17,6 +17,7 @@ export type {
   Handoff,
   RoleTemplate,
   Task,
+  AgentRun,
 } from "./schema";
 export * from "./repositories/util";
 export * from "./repositories/audit";
@@ -41,4 +42,6 @@ export * from "./repositories/agent-roles";
 export * from "./repositories/delegation";
 export * from "./repositories/handoffs";
 export * from "./repositories/temporary-agents";
+export * from "./repositories/execution";
+export * from "./repositories/runs";
 export { syncReferenceData, syncAccessReferenceData } from "./seed/reference";

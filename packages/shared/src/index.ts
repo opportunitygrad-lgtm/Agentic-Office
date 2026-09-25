@@ -9,3 +9,4 @@ export * from "./knowledge-dto";
 export * from "./workforce";
 export * from "./workforce-schemas";
 export * from "./workforce-dto";
+export * from "./execution";

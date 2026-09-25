@@ -18,6 +18,9 @@ import type { HealthProbe } from "./health";
 import { registerRoutes } from "./routes";
 import { knowledgeRoutes } from "./knowledge-routes";
 import { workforceRoutes } from "./workforce-routes";
+import { executionRoutes, type ExecutionDeps } from "./execution-routes";
+import { MemoryRunBus } from "./run-bus";
+import { createProviderRegistry } from "@aibos/provider-core";
 import { TooManyRequestsError, UnauthorizedError, securityPlugin } from "./security";
 import { MemoryThrottle, type ThrottleStore } from "./throttle";
 
@@ -33,9 +36,12 @@ export interface AppDeps {
   /** Proxies allowed to set X-Forwarded-For (the Next.js rewrite). */
   trustProxy?: string | boolean;
   production?: boolean;
+  /** Stage 05 execution: provider registry + run bus. Tests default to mock + in-memory bus. */
+  execution?: ExecutionDeps;
 }
 
 interface ResolvedDeps extends AppDeps {
+  execution: ExecutionDeps;
   throttle: ThrottleStore;
   delivery: SecurityDelivery;
   cookieSecure: boolean;
@@ -62,6 +68,14 @@ export async function buildApp(input: AppDeps): Promise<FastifyInstance> {
     delivery: input.delivery ?? { passwordReset: async () => {} },
     cookieSecure: input.cookieSecure ?? !!input.production,
     webOrigin,
+    execution: input.execution ?? {
+      env: {
+        registry: createProviderRegistry({ mode: "mock", env: {} }),
+        timeoutMs: 30_000,
+        historyLimit: 12,
+      },
+      bus: new MemoryRunBus(),
+    },
   };
   app.decorate("deps", deps);
 
@@ -131,6 +145,7 @@ export async function buildApp(input: AppDeps): Promise<FastifyInstance> {
   await app.register(registerRoutes, { prefix: "/v1" });
   await app.register(knowledgeRoutes, { prefix: "/v1" });
   await app.register(workforceRoutes, { prefix: "/v1" });
+  await app.register(executionRoutes(deps.execution), { prefix: "/v1" });
 
   // Public liveness. Production exposes only the overall status.
   app.get("/health", async () => {

@@ -30,7 +30,11 @@ export function UsagePanel({ usage }: { usage: UsageSummaryDTO }) {
       id="ai-usage"
       title="AI usage"
       eyebrow="Cost governor"
-      actions={usage.isMock ? <MockBadge /> : undefined}
+      actions={
+        usage.providers.some((p) => p.isMock && p.monthUsd > 0) ? (
+          <MockBadge label="Includes mock data" />
+        ) : undefined
+      }
       bodyClassName="p-4 sm:p-5 space-y-5"
     >
       <div className="flex items-center gap-4">
@@ -131,6 +135,50 @@ export function UsagePanel({ usage }: { usage: UsageSummaryDTO }) {
         </div>
       </figure>
 
+      {(() => {
+        const c = usage.providers.find((p) => p.provider === "CLAUDE");
+        if (!c) return null;
+        return (
+          <dl
+            className="grid grid-cols-3 gap-2 rounded-xl border border-line bg-surface-2/40 p-3 text-[11.5px]"
+            data-testid="claude-usage"
+          >
+            <div>
+              <dt className="text-fg-faint">Claude calls today</dt>
+              <dd className="num font-semibold">{c.callsToday}</dd>
+            </div>
+            <div>
+              <dt className="text-fg-faint">Input / output (month)</dt>
+              <dd className="num font-semibold">
+                {c.inputTokens.toLocaleString()} / {c.outputTokens.toLocaleString()}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-fg-faint">Cache reads (month)</dt>
+              <dd className="num font-semibold">{c.cacheReadTokens.toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt className="text-fg-faint">Spend today</dt>
+              <dd className="num font-semibold">{formatUsd(c.todayUsd)}</dd>
+            </div>
+            <div>
+              <dt className="text-fg-faint">Spend month</dt>
+              <dd className="num font-semibold">{formatUsd(c.monthUsd)}</dd>
+            </div>
+            <div>
+              <dt className="text-fg-faint">Average run cost</dt>
+              <dd className="num font-semibold">
+                {c.averageCallUsd !== null ? formatUsd(c.averageCallUsd) : "—"}
+              </dd>
+            </div>
+            <p className="col-span-3 text-fg-faint">
+              Real Claude usage only. Real spend today across providers:{" "}
+              {formatUsd(usage.liveTodayUsd)}.
+            </p>
+          </dl>
+        );
+      })()}
+
       <table className="w-full text-[12.5px]">
         <caption className="sr-only">Spend by provider</caption>
         <thead>
@@ -160,6 +208,16 @@ export function UsagePanel({ usage }: { usage: UsageSummaryDTO }) {
                     aria-hidden="true"
                   />
                   {PROVIDER_LABELS[p.provider]}
+                  <span
+                    className={cn(
+                      "rounded px-1 text-[10px] font-medium",
+                      p.isMock
+                        ? "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+                        : "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300",
+                    )}
+                  >
+                    {p.isMock ? "MOCK" : "REAL"}
+                  </span>
                 </span>
               </th>
               <td className="hidden py-1 sm:table-cell">

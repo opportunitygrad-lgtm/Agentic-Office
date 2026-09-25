@@ -76,6 +76,11 @@ export interface CompanyAiPolicyDTO {
   autoSendPolicy: AiPolicyMode;
   staleKnowledgePolicy: StaleKnowledgePolicy;
   customRules: string[];
+  /** Stage 05 provider policy. */
+  defaultModelTier: "standard" | "premium" | "auto";
+  premiumAllowed: boolean;
+  maxResponseDetail: "short" | "normal" | "detailed" | "custom";
+  fallbackAllowed: boolean;
   updatedAt: string | null;
 }
 

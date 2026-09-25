@@ -65,6 +65,7 @@ export async function getWorkforcePolicy(db: Db): Promise<WorkforcePolicyDTO> {
     tempAgentMaxExpiryHours: r.tempAgentMaxExpiryHours,
     tempAgentApprovalBudgetUsd: r.tempAgentApprovalBudgetUsd,
     maxActiveTempAgentsPerCompany: r.maxActiveTempAgentsPerCompany,
+    globalDailyAiBudgetUsd: r.globalDailyAiBudgetUsd,
     updatedAt: r.updatedAt.toISOString(),
   };
 }
@@ -109,7 +110,11 @@ export async function refreshAgentStates(db: Db, agentIds?: readonly string[]): 
   if (agentIds && !agentIds.length) return;
   const open = OPEN_TASK_STATUSES.map((s) => `'${s}'`).join(",");
   await db.execute(sql`
-    update agents a set status = coalesce((
+    update agents a set status = coalesce(
+    -- Stage 05: an agent executing a real run is working, whatever its task mix.
+    (select 'working' from agent_runs r where r.agent_id = a.id
+       and r.status in ('preparing','routing','running','streaming','cancel_requested') limit 1),
+    (
       select case
         when bool_or(t.status = 'needs_approval') then 'needs_approval'
         when bool_or(t.status = 'running') then 'working'

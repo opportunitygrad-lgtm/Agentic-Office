@@ -17,14 +17,17 @@
     "db:reset": "tsx src/reset.ts && tsx src/migrate.ts && tsx src/seed/run.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "auth:bootstrap": "tsx src/auth/bootstrap.ts"
+    "auth:bootstrap": "tsx src/auth/bootstrap.ts",
+    "claude:live": "tsx src/live/claude-smoke.ts"
   },
   "dependencies": {
     "@aibos/access-core": "workspace:*",
     "@aibos/agent-core": "workspace:*",
     "@aibos/context-core": "workspace:*",
     "@aibos/delegation-core": "workspace:*",
+    "@aibos/execution-core": "workspace:*",
     "@aibos/integration-core": "workspace:*",
+    "@aibos/provider-core": "workspace:*",
     "@aibos/shared": "workspace:*",
     "@node-rs/argon2": "^2.2.1",
     "drizzle-orm": "^0.45.3",

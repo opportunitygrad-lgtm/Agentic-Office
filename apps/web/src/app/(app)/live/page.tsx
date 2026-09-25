@@ -2,6 +2,7 @@ import type { LiveSessionDTO } from "@aibos/shared";
 import { Panel } from "@aibos/ui";
 import { PageError } from "@/components/common/PageError";
 import { PageHeader } from "@/components/common/PageHeader";
+import { ActiveRuns } from "@/components/execution/ActiveRuns";
 import { LiveAgentScreen } from "@/components/live/LiveAgentScreen";
 import { LiveSessionSwitcher } from "@/components/live/LiveSessionSwitcher";
 import { apiGet, companyParam, type SearchParams } from "@/lib/api";
@@ -21,10 +22,12 @@ export default async function LivePage({ searchParams }: { searchParams: SearchP
       <PageHeader
         eyebrow="Operations"
         title="Live sessions"
-        description="Near-live view of what each agent is doing. This is the Stage 01 placeholder: sessions are simulated from agent and task state; real browser streaming and human takeover arrive in Stages 29–32."
-        devData
+        description="Real agent runs (text agents) first. Browser sessions below are still the Stage 01 simulation; real browser streaming and human takeover arrive in Stages 29–32."
       />
-      <Panel title="Focused session" eyebrow="Viewer">
+      <Panel title="Agent runs" eyebrow="Real execution state" className="mb-6">
+        <ActiveRuns company={company} />
+      </Panel>
+      <Panel title="Focused browser session (simulated)" eyebrow="Mock viewer">
         <LiveSessionSwitcher sessions={sessions} />
       </Panel>
       {sessions.length > 1 && (

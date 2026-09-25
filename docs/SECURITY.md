@@ -170,6 +170,24 @@ then purge it from history. Deleting the file is not enough.
   teams and the workforce policy need platform-level permissions.
 - **Conversations** are private to their owner; no AI is called in Stage 04.
 
+## AI execution security (Stage 05)
+
+| Risk                             | Control                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credential exposure              | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` only in process env (`.env` locally, gitignored). Never stored in PostgreSQL, returned by the API, rendered, logged or placed in audit metadata. Provider errors are normalised to fixed messages + request id. Settings show "configured / not configured" only. |
+| Cross-company execution          | Run start, view, stream, stop and feedback resolve the run's company and check the permission in that company (404 otherwise). `?company=` is never trusted; chat conversations belong to their owner.                                                                                                         |
+| Restricted leakage               | Context Pack built only for the run's company and capped at `min(agent clearance, starter clearance)`; stored on the run so worker-side builds cannot widen it. Isolation is enforced in software, not by the model.                                                                                           |
+| Prompt injection                 | System blocks carry authority; company context, history and the user message are fenced as data (`trust="data"`), look-alike tags neutralised. No tools are sent, so injected text cannot act.                                                                                                                 |
+| Routing bypass / tier escalation | Router is deterministic and server-side; premium requires the company's `premiumAllowed`; agents can lower but never raise effort; no automatic Opus; no silent fallback.                                                                                                                                      |
+| Budget bypass                    | Preflight (task, agent, company daily/monthly, provider, global) + reservations under advisory locks before enqueue; the provider is never called first; mock usage never counts.                                                                                                                              |
+| Duplicate calls                  | One active run per task/conversation (DB partial unique indexes), idempotency keys, atomic `begin()`; recovery never re-pays a started call (`NEEDS_REVIEW`).                                                                                                                                                  |
+| Cancellation                     | Stop aborts the real HTTP request via `AbortSignal`.                                                                                                                                                                                                                                                           |
+| Unbounded retries                | SDK retries off; at most one retry for transient typed errors; every call has a timeout.                                                                                                                                                                                                                       |
+| Result overwriting               | Each run stores its own result; reruns create new runs.                                                                                                                                                                                                                                                        |
+| Logs                             | Worker/API logs carry ids, status, model, timings — never context, prompts, output or credentials.                                                                                                                                                                                                             |
+| Live tests in CI                 | `pnpm test` / `test:e2e` use mocks; `pnpm test:claude-live` refuses without `ALLOW_LIVE_AI_TESTS=true`; mock mode refused in production.                                                                                                                                                                       |
+| Connection test abuse            | Platform-only `provider.test`, audited, 5 per 10 minutes per user, token-free (`models.retrieve`).                                                                                                                                                                                                             |
+
 ## Security logging
 
 - Append-only `audit_events` with `actor_type`, `actor_user_id` /
@@ -204,6 +222,6 @@ production: `pnpm db:seed` refuses when `NODE_ENV=production`.
 
 ## Planned hardening
 
-Stage 12 (credential vault), 33 (approval engine: expiry, delegation,
+Stage 12 (credential vault — AI provider keys move there too), 33 (approval engine: expiry, delegation,
 multi-person), 34 (audit immutability/export), 38 (backups), 39 (rate
 limiting at the edge, CSP, dependency and secret scanning, pen-test fixes).

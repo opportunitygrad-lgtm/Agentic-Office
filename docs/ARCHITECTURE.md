@@ -17,10 +17,12 @@ TASK ROUTER                      packages/agent-core   (RuleBasedTaskRouter)
 AGENT REGISTRY                   agents + agent_company_assignments + templates
   ↓
 AI PROVIDER ROUTER               packages/provider-core (ProviderRouter)
-  ├── Claude   ─┐
-  ├── OpenAI    │  AIProvider interface — mock + unconfigured adapters in Stage 01
-  ├── Grok      │
+  ├── Claude   ─┐  AIProvider interface — Claude live via the Anthropic SDK
+  ├── OpenAI    │  (Stage 05); OpenAI/Grok placeholders (PROVIDER_NOT_CONFIGURED);
+  ├── Grok      │  Local deterministic
   └── Local    ─┘
+  ↓
+EXECUTION PIPELINE               packages/execution-core (worker only)
   ↓
 TOOLS / INTEGRATIONS             packages/integration-core, packages/browser-core
   ↓
@@ -35,11 +37,12 @@ AUDIT LOG                        audit_events (append-only)
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/web`                  | Next.js 16 command centre. Server components fetch the API; `/api/*` is rewritten to the API so the browser is same-origin.                                 |
 | `apps/api`                  | Fastify 5 HTTP API (`/v1/*`, `/health`). Thin: validates with Zod, calls repositories, maps errors.                                                         |
-| `apps/worker`               | BullMQ workers. Stage 01: heartbeat (drives worker health) and a no-op `agent-tasks` processor.                                                             |
+| `apps/worker`               | BullMQ workers: heartbeat, and (Stage 05) the `agent-runs` processor — the only place a provider is called; run recovery on start.                          |
 | `packages/shared`           | Enums (single source of truth for every status vocabulary), Zod schemas, API DTO types, formatting helpers. Browser-safe.                                   |
 | `packages/db`               | Drizzle schema, migrations, repositories (data-access layer returning DTOs), reference data sync, development seed.                                         |
 | `packages/agent-core`       | Agent template definitions, departments, task-routing contract + reference router.                                                                          |
-| `packages/provider-core`    | `AIProvider` contract, mock providers, unconfigured live adapters, provider router, placeholder pricing.                                                    |
+| `packages/provider-core`    | `AIProvider` contract, `ClaudeProvider` (Anthropic SDK), `MockClaudeProvider`, placeholders, registry, deterministic router, pricing.                       |
+| `packages/execution-core`   | Stage 05 run pipeline: provider message construction, output/retry/timeout policy, `executeRun` against a `RunStore`. No DB or SDK imports.                 |
 | `packages/integration-core` | Integration catalogue (16 systems), adapter contract, placeholder adapter.                                                                                  |
 | `packages/browser-core`     | Browser-worker contracts and the mock live-session generator behind `LiveAgentScreen`.                                                                      |
 | `packages/context-core`     | Stage 03 Agent Context Engine: deterministic context-pack assembly, relevance, budgets, rule evaluation, retriever/ingestion contracts. Pure, browser-safe. |
@@ -98,18 +101,23 @@ AUDIT LOG                        audit_events (append-only)
 
 ```ts
 interface AIProvider {
-  executeTask(req): Promise<ProviderTaskResult>;
-  estimateCost(req): CostEstimate;
-  supportsCapability(cap): boolean;
-  cancel(requestId): Promise<void>;
-  healthCheck(): Promise<ProviderHealth>;
+  providerId;
+  available();
+  healthCheck({ probe });
+  capabilities;
+  supportedModels;
+  estimate(req): CostEstimate;
+  execute(req, handlers): Promise<ProviderResult>; // streams internally
+  stream(req, handlers): Promise<ProviderResult>;
+  cancel(runId): void; // aborts the in-flight AbortController
+  normalizeError(err): ProviderError; // typed SDK error classes → stable codes
 }
 ```
 
-`ProviderRouter.select()` resolves required → primary → fallback → company
-default → any capable provider, honouring unavailability. Capabilities:
-reasoning, coding, web_research, x_research, computer_use, vision,
-document_analysis, email_drafting.
+`routeExecution()` (Stage 05) is deterministic: LOCAL for deterministic work →
+task requirement → agent primary → company preferred → capability →
+availability → budget → model tier → approved fallback only. See
+[AI_EXECUTION.md](AI_EXECUTION.md).
 
 ## Frontend design system
 
@@ -308,3 +316,27 @@ Details: `docs/AGENT_OPERATING_MODEL.md`.
 Task → delegation-core (who?) → assignment → Context Engine (what it knows)
      → instruction compiler (how it must behave) → [Stage 05: provider]
 ```
+
+## AI execution (Stage 05)
+
+Full detail in [AI_EXECUTION.md](AI_EXECUTION.md).
+
+```
+Web (Run / Chat) → API: authorize, preview route, budget preflight, reserve,
+                   insert agent_runs row, enqueue (never calls a provider)
+                 → BullMQ `agent-runs` → Worker: executeRun()
+                     compile instructions (Stage 04) + Context Pack (Stage 03,
+                     capped to the starter's clearance) → provider messages
+                     (system = authority, user = fenced data, cached prefix)
+                     → ClaudeProvider.stream (timeout, AbortSignal, ≤1 retry)
+                     → save raw response → validate → result + usage ledger
+                 → Redis `aibos:run:<id>` → API SSE `/runs/:id/stream` → UI
+Stop → API → `aibos:run-cancel` → worker aborts the request
+```
+
+- **Result storage:** each run keeps its own result/output/usage; reruns
+  create new numbered runs and never overwrite earlier results.
+- **Proposals** (knowledge drafts, handoffs) are stored for preview only; no
+  automatic multi-agent cascade and no external tools.
+- **Health:** the API health endpoint includes a Claude Provider row;
+  `NOT_CONFIGURED` is informational, not an error.

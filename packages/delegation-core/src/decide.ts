@@ -2,13 +2,13 @@ import {
   CAPABILITY_PERMISSIONS,
   type AgentCapability,
   type AgentStatus,
-  type BudgetDecision,
   type CandidateCheck,
   type CandidateEvaluation,
   type DelegationDecisionDTO,
   type TaskPriority,
   type TaskType,
 } from "@aibos/shared";
+import { evaluateBudget } from "./budget";
 import { detectDuplicates, type DuplicateCandidateTask } from "./duplicates";
 
 /**
@@ -267,31 +267,20 @@ export function decideDelegation(req: DelegationRequest): DelegationDecisionDTO 
   const estimate = t.estimatedCost ?? t.maxBudget ?? 0;
 
   /* budget */
-  const budgetReasons: string[] = [];
-  let budget: BudgetDecision = "allowed";
-  if (t.maxBudget !== null && estimate > t.maxBudget) {
-    budget = "blocked";
-    budgetReasons.push(`Estimate $${estimate} exceeds the task budget $${t.maxBudget}`);
-  }
-  if (estimate > req.budget.companyDailyRemaining) {
-    budget = "blocked";
-    budgetReasons.push(
-      `Estimate $${estimate} exceeds the company's remaining daily budget $${req.budget.companyDailyRemaining.toFixed(2)}`,
-    );
-  }
   const deptRemaining = t.departmentId ? req.budget.departmentRemaining[t.departmentId] : null;
-  if (deptRemaining !== null && deptRemaining !== undefined && estimate > deptRemaining) {
-    budget = "blocked";
-    budgetReasons.push(
-      `Estimate $${estimate} exceeds the department's remaining budget $${deptRemaining}`,
-    );
-  }
-  if (budget === "allowed" && estimate > req.budget.highCostThresholdUsd) {
-    budget = "requires_approval";
-    budgetReasons.push(
-      `High-cost task: $${estimate} is above the $${req.budget.highCostThresholdUsd} approval threshold`,
-    );
-  }
+  const { decision: budget, reasons: budgetReasons } = evaluateBudget(
+    estimate,
+    [
+      { label: "the task budget", remainingUsd: t.maxBudget },
+      {
+        label: "the company's remaining daily budget",
+        remainingUsd: req.budget.companyDailyRemaining,
+        fixed: true,
+      },
+      { label: "the department's remaining budget", remainingUsd: deptRemaining ?? null },
+    ],
+    req.budget.highCostThresholdUsd,
+  );
   if (!budgetReasons.length)
     budgetReasons.push(`Estimate $${estimate} within task, agent and company budgets`);
   const approvalRequired =

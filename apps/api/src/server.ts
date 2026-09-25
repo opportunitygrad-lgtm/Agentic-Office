@@ -1,9 +1,12 @@
 import { Redis } from "ioredis";
-import { createDb } from "@aibos/db";
+import { createDb, providerStatuses } from "@aibos/db";
+import { chatHistoryLimit, providerTimeoutMs } from "@aibos/execution-core";
+import { createProviderRegistry } from "@aibos/provider-core";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
 import { createDevDelivery } from "./delivery";
 import { createHealthProbe } from "./health";
+import { createRedisRunBus } from "./run-bus";
 import { RedisThrottle } from "./throttle";
 
 const config = loadConfig();
@@ -17,9 +20,36 @@ redis.on("error", () => {
   /* surfaced through /health; avoid crashing on transient Redis loss */
 });
 
+// Credentials are read from the server environment only; never sent to the browser.
+const registry = createProviderRegistry();
+const bus = createRedisRunBus(config.REDIS_URL);
+const claudeHealth = async () => {
+  const [claude] = (await providerStatuses(db.db, registry)).filter((p) => p.provider === "CLAUDE");
+  const state = claude?.state ?? "not_configured";
+  const status =
+    state === "not_configured"
+      ? "not_configured"
+      : state === "available"
+        ? "ok"
+        : state === "unavailable" || state === "auth_error"
+          ? "down"
+          : "degraded";
+  return {
+    status: status as "ok" | "degraded" | "down" | "not_configured",
+    detail:
+      state === "not_configured"
+        ? "Not configured"
+        : `${state.replace("_", " ")}${claude?.isMock ? " (mock)" : ""}`,
+  };
+};
+
 const app = await buildApp({
   db,
-  health: createHealthProbe(db, redis),
+  health: createHealthProbe(db, redis, { claude: claudeHealth }),
+  execution: {
+    env: { registry, timeoutMs: providerTimeoutMs(), historyLimit: chatHistoryLimit() },
+    bus,
+  },
   corsOrigins: config.API_CORS_ORIGINS,
   throttle: new RedisThrottle(redis),
   cookieSecure: config.COOKIE_SECURE ?? config.NODE_ENV === "production",
@@ -47,6 +77,7 @@ await app.listen({ host: config.API_HOST, port: config.API_PORT });
 
 async function shutdown() {
   await app.close();
+  await bus.close?.();
   await db.close();
   redis.disconnect();
   process.exit(0);

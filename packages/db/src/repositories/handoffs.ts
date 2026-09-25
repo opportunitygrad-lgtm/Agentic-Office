@@ -2,7 +2,6 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { agentMaxSensitivity } from "@aibos/context-core";
 import {
-  conversationMessageSchema,
   createAgentMessageSchema,
   createConversationSchema,
   createHandoffSchema,
@@ -20,6 +19,7 @@ import type { Database } from "../client";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors";
 import {
   agentCompanyAssignments,
+  agentRuns,
   agentMessages,
   agents,
   companies,
@@ -503,9 +503,6 @@ export async function listAgentMessages(
 
 /* ---------- conversations (foundation — no AI replies in Stage 04) ---------- */
 
-export const CONVERSATION_PLACEHOLDER =
-  "Message recorded. Live agent replies arrive with provider integration (Stage 05); no AI was called.";
-
 export async function createConversation(
   db: Database,
   input: z.input<typeof createConversationSchema>,
@@ -601,41 +598,27 @@ export async function listConversationMessages(
         firstName: users.firstName,
         lastName: users.lastName,
       },
+      runStatus: agentRuns.status,
     })
     .from(conversationMessages)
     .leftJoin(users, eq(users.id, conversationMessages.authorUserId))
+    .leftJoin(agentRuns, eq(agentRuns.id, conversationMessages.runId))
     .where(eq(conversationMessages.conversationId, conversationId))
     // A human message and its placeholder share a timestamp: the human message comes first.
     .orderBy(
       conversationMessages.createdAt,
       sql`case when ${conversationMessages.role} = 'human' then 0 else 1 end`,
     );
-  return rows.map(({ m, u }) => ({
+  return rows.map(({ m, u, runStatus }) => ({
     id: m.id,
     role: m.role as ConversationMessageDTO["role"],
     author:
       m.role === "human" && u?.email ? displayNameOf(u) : m.role === "system" ? "System" : "Agent",
     content: m.content,
     createdAt: m.createdAt.toISOString(),
+    runId: m.runId,
+    runStatus: runStatus ?? null,
+    provider: m.provider,
+    model: m.model,
   }));
-}
-
-export async function addConversationMessage(
-  db: Database,
-  conversationId: string,
-  input: z.input<typeof conversationMessageSchema>,
-  actor: Actor,
-): Promise<ConversationMessageDTO[]> {
-  const data = conversationMessageSchema.parse(input);
-  const c = await getOwnConversation(db, conversationId, actor.userId ?? "");
-  if (c.status === "closed") throw new ConflictError("This conversation is closed");
-  await db.insert(conversationMessages).values([
-    { conversationId, role: "human", authorUserId: actor.userId ?? null, content: data.content },
-    { conversationId, role: "system", content: CONVERSATION_PLACEHOLDER },
-  ]);
-  await db
-    .update(conversations)
-    .set({ updatedAt: new Date() })
-    .where(eq(conversations.id, conversationId));
-  return listConversationMessages(db, conversationId);
 }

@@ -70,13 +70,42 @@ Prompts for the password; refuses if any user exists. See docs/SECURITY.md.
 | `pnpm auth:bootstrap`                         | Create the first Platform Owner on an empty database (prompts for password) |
 | `pnpm dev`                                    | Run web, API and worker together (or `dev:web`, `dev:api`, `dev:worker`)    |
 | `pnpm test`                                   | All Vitest suites (unit, DB, API, frontend). DB/API tests need `infra:up`   |
-| `pnpm test:e2e`                               | Playwright responsive/navigation smoke (needs `pnpm dev` running)           |
+| `pnpm test:e2e`                               | Playwright flows (needs `pnpm dev`; execution flows need mock mode, below)  |
+| `pnpm test:claude-live`                       | Guarded live Claude smoke (see "Claude configuration")                      |
 | `pnpm typecheck`                              | `tsc --noEmit` in every workspace                                           |
 | `pnpm lint`                                   | ESLint (zero warnings allowed)                                              |
 | `pnpm format` / `format:check`                | Prettier                                                                    |
 | `pnpm check`                                  | lint + typecheck + test                                                     |
 
 Targeted runs: `pnpm --filter @aibos/api test`, `pnpm --filter @aibos/web test`.
+
+## Claude configuration (Stage 05)
+
+Add a credential to the local `.env` (never commit it, never paste it into a
+chat) and restart `pnpm dev`:
+
+```
+ANTHROPIC_API_KEY=...            # or ANTHROPIC_AUTH_TOKEN=... (approved bearer)
+# ANTHROPIC_WORKSPACE_ID=...     # optional
+CLAUDE_DEFAULT_MODEL=claude-sonnet-5
+CLAUDE_PREMIUM_MODEL=claude-opus-5-5
+CLAUDE_DEFAULT_EFFORT=medium
+CLAUDE_PREMIUM_EFFORT=high
+AI_PROVIDER_TIMEOUT_MS=180000
+CHAT_HISTORY_MAX_MESSAGES=12
+```
+
+Without a credential Settings → AI Providers shows Claude as _Not configured_
+and runs are blocked with a clear message.
+
+- **Mock mode (no credit):** `AIBOS_AI_PROVIDER_MODE=mock pnpm dev` uses the
+  deterministic mock Claude in API and worker (optionally
+  `AIBOS_MOCK_CHUNK_DELAY_MS=60` to watch streaming). Required for the
+  execution E2E spec, which skips itself otherwise. Refused in production.
+- **Live smoke:** `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live` — one
+  connection test, one short Sonnet task on a `[DEV SMOKE TEST]` EPT task and
+  one chat; prints tokens, cost and latency. Never part of `pnpm test` or
+  `pnpm test:e2e`, never uses Opus.
 
 ## Tests
 

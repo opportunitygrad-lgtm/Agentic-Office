@@ -41,7 +41,8 @@ test("platform owner: org chart, role versioning, instruction preview, delegatio
   const summary = `E2E focus ${Date.now()}`;
   await page
     .getByRole("textbox", { name: "Mission" })
-    .fill("Attract qualified international pilot-training candidates across Europe.");
+    // Unique per run so the form is dirty even when a previous run saved a version.
+    .fill(`Attract qualified international pilot-training candidates across Europe (${summary}).`);
   await page.getByLabel(/Change summary/).fill(summary);
   await page.getByRole("button", { name: "Save new version" }).click();
   await expect(page.getByRole("status").filter({ hasText: /Saved as version \d+/ })).toBeVisible();

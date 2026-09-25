@@ -68,4 +68,5 @@ export const LIMITS = {
   resetPerIp: { max: 10, window: 60 * 60 },
   resetPerEmail: { max: 3, window: 60 * 60 },
   tokenPerIp: { max: 20, window: 15 * 60 },
+  providerTestPerUser: { max: 5, window: 10 * 60 },
 } as const;

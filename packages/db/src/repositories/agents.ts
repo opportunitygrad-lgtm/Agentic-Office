@@ -288,6 +288,8 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
         boundTaskId: a.boundTaskId,
         maySpawnTemporary: a.maySpawnTemporary,
         roleVersion: versionOf.get(a.id) ?? null,
+        preferredModelTier: a.preferredModelTier,
+        defaultEffort: a.defaultEffort,
         lastActiveAt: iso(a.lastActiveAt),
         origin: a.origin,
         createdAt: a.createdAt.toISOString(),

@@ -250,7 +250,14 @@ export const ONBOARDING_AGENT_TEMPLATES: readonly AgentTemplateKey[] = [
 export const QUEUE_NAMES = {
   system: "system",
   agentTasks: "agent-tasks",
+  /** Stage 05: real agent runs (provider calls happen only in the worker). */
+  agentRuns: "agent-runs",
 } as const;
+
+/** Redis pub/sub channel carrying sanitised events for one run (worker → API SSE). */
+export const runEventsChannel = (runId: string) => `aibos:run:${runId}`;
+/** Redis pub/sub channel for stop requests (API → worker). */
+export const RUN_CANCEL_CHANNEL = "aibos:run-cancel";
 
 /** Redis key the worker refreshes so the API can report worker health. */
 export const WORKER_HEARTBEAT_KEY = "aibos:worker:heartbeat";

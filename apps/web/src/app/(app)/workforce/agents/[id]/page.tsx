@@ -17,6 +17,7 @@ import { ContextPreview } from "@/components/context/ContextPreview";
 import { KnowledgeProfilePanel } from "@/components/context/KnowledgeProfilePanel";
 import { AgentChatShell } from "@/components/workforce/AgentChatShell";
 import { AgentStructurePanel } from "@/components/workforce/AgentStructurePanel";
+import { AgentProviderPanel } from "@/components/execution/AgentProviderPanel";
 import { InstructionPreview } from "@/components/workforce/InstructionPreview";
 import { RoleEditor } from "@/components/workforce/RoleEditor";
 import { apiGet, apiTry, type SearchParams } from "@/lib/api";
@@ -170,6 +171,9 @@ export default async function AgentDetailPage({
                   {formatDateTime(agent.expiresAt)}
                 </p>
               )}
+            </Panel>
+            <Panel title="AI provider & performance" eyebrow="Bounded by company AI policy">
+              <AgentProviderPanel agent={agent} canEdit={canEdit} />
             </Panel>
             <Panel title="Hierarchy & capabilities">
               <AgentStructurePanel

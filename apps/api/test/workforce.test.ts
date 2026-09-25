@@ -408,7 +408,7 @@ describe("temporary workers & handoffs", () => {
     ).toBe(404);
   });
 
-  it("stores conversation messages with a placeholder and no AI reply", async () => {
+  it("stores the message and queues an agent run instead of replying inline (Stage 05)", async () => {
     const agent = await agentByName("EPT Marketing");
     const c = await send("ept.manager", "POST", "/v1/conversations", {
       agentId: agent.id,
@@ -416,10 +416,11 @@ describe("temporary workers & handoffs", () => {
     });
     expect(c.statusCode).toBe(201);
     const id = c.json<{ data: { id: string } }>().data.id;
-    const msgs = (
+    const sent = (
       await send("ept.manager", "POST", `/v1/conversations/${id}/messages`, { content: "Hello" })
-    ).json<{ data: { role: string }[] }>().data;
-    expect(msgs.map((m) => m.role)).toEqual(["human", "system"]);
+    ).json<{ data: { runId: string; messages: { role: string }[] } }>().data;
+    expect(sent.messages.map((m) => m.role)).toEqual(["human"]);
+    expect(sent.runId).toBeTruthy();
     expect((await get("pa.manager", `/v1/conversations/${id}/messages`)).statusCode).toBe(404);
   });
 });

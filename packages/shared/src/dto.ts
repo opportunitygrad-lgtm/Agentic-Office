@@ -135,6 +135,9 @@ export interface AgentDTO {
   boundTaskId: string | null;
   maySpawnTemporary: boolean;
   roleVersion: number | null;
+  /** Stage 05 provider preferences. */
+  preferredModelTier: "standard" | "premium" | "auto";
+  defaultEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   lastActiveAt: string | null;
   origin: DataOrigin;
   createdAt: string;
@@ -255,11 +258,17 @@ export interface IntegrationDTO {
 
 export interface ProviderUsageDTO {
   provider: ProviderType;
+  /** Stage 05: CLAUDE shows real (live) usage only; others remain labelled mock data. */
+  isMock: boolean;
   todayUsd: number;
   monthUsd: number;
   calls: number;
+  callsToday: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  averageCallUsd: number | null;
   /** 14 daily spend points, oldest → newest. */
   trend: number[];
 }
@@ -272,10 +281,13 @@ export interface UsageSummaryDTO {
   monthlyBudgetUsd: number;
   todayUsd: number;
   monthUsd: number;
+  /** Real (live) spend only — never mixed with mock rows. */
+  liveTodayUsd: number;
+  liveMonthUsd: number;
   providers: ProviderUsageDTO[];
 }
 
-export type HealthState = "ok" | "degraded" | "down" | "unknown";
+export type HealthState = "ok" | "degraded" | "down" | "unknown" | "not_configured";
 
 export interface SystemHealthDTO {
   status: HealthState;

@@ -12,9 +12,12 @@ import {
   TEMPLATE_ROLES,
 } from "@aibos/agent-core";
 import { INTEGRATION_CATALOG } from "@aibos/integration-core";
+import { PROVIDER_TYPES } from "@aibos/shared";
 import type { Database } from "../client";
 import {
   agentTemplates,
+  aiModelPrices,
+  aiProviderSettings,
   approvalRequirements,
   workforcePolicy,
   departments,
@@ -30,7 +33,49 @@ import {
  * global departments, agent template definitions and platform-wide
  * integration placeholders. Idempotent upserts keyed on natural keys.
  */
+/**
+ * Claude prices (USD per million tokens) verified against the official
+ * Anthropic pricing page on 2026-09-25 (5-minute cache writes; cache hits).
+ * Editable later; completed calls keep the snapshot they were priced with.
+ */
+export const REFERENCE_MODEL_PRICES = [
+  {
+    provider: "CLAUDE" as const,
+    model: "claude-sonnet-5",
+    inputPerMTok: 2,
+    outputPerMTok: 10,
+    cacheWritePerMTok: 2.5,
+    cacheReadPerMTok: 0.2,
+  },
+  {
+    provider: "CLAUDE" as const,
+    model: "claude-opus-5-5",
+    inputPerMTok: 4,
+    outputPerMTok: 20,
+    cacheWritePerMTok: 5,
+    cacheReadPerMTok: 0.2,
+  },
+];
+export const MODEL_PRICE_SOURCE =
+  "https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-09-25)";
+export const MODEL_PRICES_EFFECTIVE_FROM = new Date("2026-09-01T00:00:00Z");
+
 export async function syncReferenceData(db: Database): Promise<void> {
+  await db
+    .insert(aiModelPrices)
+    .values(
+      REFERENCE_MODEL_PRICES.map((p) => ({
+        ...p,
+        effectiveFrom: MODEL_PRICES_EFFECTIVE_FROM,
+        source: MODEL_PRICE_SOURCE,
+      })),
+    )
+    .onConflictDoNothing();
+  await db
+    .insert(aiProviderSettings)
+    .values(PROVIDER_TYPES.map((provider) => ({ provider })))
+    .onConflictDoNothing();
+
   await db
     .insert(departments)
     .values(

@@ -10,12 +10,14 @@ const TONE: Record<HealthState, Tone> = {
   degraded: "attention",
   down: "danger",
   unknown: "neutral",
+  not_configured: "idle",
 };
 const LABEL: Record<HealthState, string> = {
   ok: "All systems operational",
   degraded: "Degraded",
   down: "Outage",
   unknown: "Unknown",
+  not_configured: "Not configured",
 };
 
 /** System health: API, PostgreSQL, Redis and worker heartbeat. Polls every 30s. */

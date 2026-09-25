@@ -71,6 +71,12 @@ import {
   DELEGATION_OUTCOMES,
   HANDOFF_STATUSES,
   HANDOFF_TYPES,
+  AGENT_RUN_STATUSES,
+  EFFORT_LEVELS,
+  MODEL_TIERS,
+  PROVIDER_HEALTH_STATES,
+  RESPONSE_DETAILS,
+  RUN_EXECUTION_TYPES,
 } from "@aibos/shared";
 
 /* ---------- enums (sourced from @aibos/shared) ---------- */
@@ -126,6 +132,12 @@ export const handoffStatus = pgEnum("handoff_status", HANDOFF_STATUSES);
 export const handoffType = pgEnum("handoff_type", HANDOFF_TYPES);
 export const agentMessageType = pgEnum("agent_message_type", AGENT_MESSAGE_TYPES);
 export const conversationStatus = pgEnum("conversation_status", CONVERSATION_STATUSES);
+export const modelTier = pgEnum("model_tier", MODEL_TIERS);
+export const effortLevel = pgEnum("effort_level", EFFORT_LEVELS);
+export const responseDetail = pgEnum("response_detail", RESPONSE_DETAILS);
+export const agentRunStatus = pgEnum("agent_run_status", AGENT_RUN_STATUSES);
+export const runExecutionType = pgEnum("run_execution_type", RUN_EXECUTION_TYPES);
+export const providerHealthState = pgEnum("provider_health_state", PROVIDER_HEALTH_STATES);
 
 /* ---------- shared column helpers ---------- */
 
@@ -294,6 +306,9 @@ export const agents = pgTable(
     primaryProvider: providerType("primary_provider").notNull().default("CLAUDE"),
     fallbackProvider: providerType("fallback_provider"),
     preferredModel: text("preferred_model"),
+    /** Stage 05: default model tier and effort (bounded by company policy). */
+    preferredModelTier: modelTier("preferred_model_tier").notNull().default("standard"),
+    defaultEffort: effortLevel("default_effort"),
     autonomyLevel: agentAutonomy("autonomy").notNull().default("observe"),
     systemInstructions: text("system_instructions"),
     responsibilities: textList("responsibilities"),
@@ -410,6 +425,10 @@ export const tasks = pgTable(
       onDelete: "set null",
     }),
     providerPreference: providerType("provider_preference"),
+    /** Stage 05: model tier (null = agent/company default), output detail and AUTO complexity signal. */
+    modelTier: modelTier("model_tier"),
+    responseDetail: responseDetail("response_detail").notNull().default("normal"),
+    highComplexity: boolean("high_complexity").notNull().default(false),
     maxBudget: usd("max_budget"),
     maxConcurrency: integer("max_concurrency"),
     delegationAllowed: boolean("delegation_allowed").notNull().default(true),
@@ -577,6 +596,12 @@ export const aiUsageRecords = pgTable(
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
     cachedTokens: integer("cached_tokens").notNull().default(0),
+    /** Stage 05: prompt-cache accounting and run reference. */
+    cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    runId: uuid("run_id"),
+    /** Price in force when the call ran (never recomputed). */
+    priceSnapshot: jsonb("price_snapshot"),
     toolCost: usd("tool_cost").notNull().default(0),
     providerCost: usd("provider_cost").notNull().default(0),
     estimatedCost: usd("estimated_cost").notNull().default(0),
@@ -856,6 +881,11 @@ export const companyAiPolicies = pgTable("company_ai_policies", {
   autoSendPolicy: aiPolicyMode("auto_send_policy").notNull().default("disabled"),
   staleKnowledgePolicy: staleKnowledgePolicy("stale_knowledge_policy").notNull().default("exclude"),
   customRules: textList("custom_rules"),
+  /** Stage 05 provider policy (the preferred provider is companies.default_provider). */
+  defaultModelTier: modelTier("default_model_tier").notNull().default("standard"),
+  premiumAllowed: boolean("premium_allowed").notNull().default(false),
+  maxResponseDetail: responseDetail("max_response_detail").notNull().default("detailed"),
+  fallbackAllowed: boolean("fallback_allowed").notNull().default(false),
   updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
     onDelete: "set null",
   }),
@@ -1102,6 +1132,8 @@ export const workforcePolicy = pgTable(
   {
     id: integer("id").primaryKey().default(1),
     globalActiveAgentLimit: integer("global_active_agent_limit").notNull().default(3),
+    /** Stage 05: platform-wide daily AI spend ceiling. */
+    globalDailyAiBudgetUsd: usd("global_daily_ai_budget_usd").notNull().default(50),
     maxDelegationDepth: integer("max_delegation_depth").notNull().default(3),
     highCostTaskThresholdUsd: usd("high_cost_task_threshold_usd").notNull().default(5),
     tempAgentMaxExpiryHours: integer("temp_agent_max_expiry_hours").notNull().default(168),
@@ -1371,11 +1403,194 @@ export const conversationMessages = pgTable(
       onDelete: "set null",
     }),
     content: text("content").notNull(),
+    /** Stage 05: the agent run that produced (or answers) this message. */
+    runId: uuid("run_id").references((): AnyPgColumn => agentRuns.id, { onDelete: "set null" }),
+    provider: providerType("provider"),
+    model: text("model"),
     createdAt: createdAt(),
   },
   (t) => [
     index("conversation_messages_idx").on(t.conversationId, t.createdAt),
     check("conversation_messages_role", sql`${t.role} in ('human', 'agent', 'system')`),
+  ],
+);
+
+/* ---------- AI execution (Stage 05) ---------- */
+
+/** Dated model prices (USD per million tokens). Runs keep a snapshot of the row used. */
+export const aiModelPrices = pgTable(
+  "ai_model_prices",
+  {
+    id: id(),
+    provider: providerType("provider").notNull(),
+    model: text("model").notNull(),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    inputPerMTok: usd("input_per_mtok").notNull(),
+    outputPerMTok: usd("output_per_mtok").notNull(),
+    cacheWritePerMTok: usd("cache_write_per_mtok").notNull(),
+    cacheReadPerMTok: usd("cache_read_per_mtok").notNull(),
+    currency: text("currency").notNull().default("USD"),
+    source: text("source"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("ai_model_prices_uq").on(t.provider, t.model, t.effectiveFrom),
+    check(
+      "ai_model_prices_nonneg",
+      sql`${t.inputPerMTok} >= 0 AND ${t.outputPerMTok} >= 0 AND ${t.cacheWritePerMTok} >= 0 AND ${t.cacheReadPerMTok} >= 0`,
+    ),
+  ],
+);
+
+/** Per-provider settings and observed health (never credentials). */
+export const aiProviderSettings = pgTable("ai_provider_settings", {
+  provider: providerType("provider").primaryKey(),
+  enabled: boolean("enabled").notNull().default(true),
+  standardModel: text("standard_model"),
+  premiumModel: text("premium_model"),
+  standardEffort: effortLevel("standard_effort"),
+  premiumEffort: effortLevel("premium_effort"),
+  dailyBudgetUsd: usd("daily_budget_usd"),
+  healthState: providerHealthState("health_state").notNull().default("not_configured"),
+  healthDetail: text("health_detail"),
+  lastHealthCheckAt: timestamp("last_health_check_at", { withTimezone: true }),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
+  lastErrorCode: text("last_error_code"),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
+  updatedAt: updatedAt(),
+});
+
+/**
+ * One agent execution (task run, chat reply or connection test). Final
+ * provider output is stored here — separate from task description, context
+ * and instructions — so results from different providers can be compared.
+ */
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: id(),
+    number: integer("number").notNull().default(1),
+    executionType: runExecutionType("execution_type").notNull(),
+    status: agentRunStatus("status").notNull().default("queued"),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references((): AnyPgColumn => tasks.id, { onDelete: "set null" }),
+    agentId: uuid("agent_id").references((): AnyPgColumn => agents.id, { onDelete: "set null" }),
+    conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, {
+      onDelete: "set null",
+    }),
+    provider: providerType("provider").notNull(),
+    model: text("model").notNull(),
+    effort: effortLevel("effort"),
+    tier: modelTier("tier").notNull().default("standard"),
+    responseDetail: responseDetail("response_detail").notNull().default("normal"),
+    maxOutputTokens: integer("max_output_tokens").notNull(),
+    timeoutMs: integer("timeout_ms").notNull(),
+    maxRetries: integer("max_retries").notNull().default(1),
+    retryCount: integer("retry_count").notNull().default(0),
+    isMock: boolean("is_mock").notNull().default(false),
+    startedByUserId: uuid("started_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    idempotencyKey: text("idempotency_key"),
+    /** Knowledge clearance of the person who started the run: context is capped to it. */
+    viewerMaxSensitivity: text("viewer_max_sensitivity").notNull().default("internal"),
+    routeReasons: textList("route_reasons"),
+    contextVersion: text("context_version"),
+    instructionVersion: text("instruction_version"),
+    contextSummary: jsonb("context_summary"),
+    providerRequestId: text("provider_request_id"),
+    providerCallStartedAt: timestamp("provider_call_started_at", { withTimezone: true }),
+    responseSavedAt: timestamp("response_saved_at", { withTimezone: true }),
+    outputText: text("output_text").notNull().default(""),
+    result: jsonb("result"),
+    stopReason: text("stop_reason"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheCreationTokens: integer("cache_creation_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    estimatedCost: usd("estimated_cost").notNull().default(0),
+    /** Lightweight cost reservation: held while active, then settled or released. */
+    reservedCost: usd("reserved_cost").notNull().default(0),
+    reservationStatus: text("reservation_status").notNull().default("none"),
+    actualCost: usd("actual_cost"),
+    priceSnapshot: jsonb("price_snapshot"),
+    latencyMs: integer("latency_ms"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    approvalId: uuid("approval_id"),
+    createdAt: createdAt(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    origin: origin(),
+  },
+  (t) => [
+    index("agent_runs_task_idx").on(t.taskId, t.createdAt),
+    index("agent_runs_agent_idx").on(t.agentId, t.createdAt),
+    index("agent_runs_company_idx").on(t.companyId, t.createdAt),
+    index("agent_runs_status_idx").on(t.status),
+    // Duplicate-run prevention at the database level: one active run per task / conversation.
+    uniqueIndex("agent_runs_one_active_task")
+      .on(t.taskId)
+      .where(
+        sql`${t.taskId} is not null and ${t.status} in ('queued','preparing','routing','running','streaming','waiting','cancel_requested')`,
+      ),
+    uniqueIndex("agent_runs_one_active_conversation")
+      .on(t.conversationId)
+      .where(
+        sql`${t.conversationId} is not null and ${t.status} in ('queued','preparing','routing','running','streaming','waiting','cancel_requested')`,
+      ),
+    uniqueIndex("agent_runs_idempotency_uq")
+      .on(t.idempotencyKey)
+      .where(sql`${t.idempotencyKey} is not null`),
+    check(
+      "agent_runs_reservation",
+      sql`${t.reservationStatus} in ('none','active','settled','released')`,
+    ),
+  ],
+);
+
+/** Observable system events for a run — never model reasoning. */
+export const agentRunEvents = pgTable(
+  "agent_run_events",
+  {
+    id: id(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    type: text("type").notNull(),
+    detail: text("detail"),
+    data: jsonb("data").notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique("agent_run_events_seq_uq").on(t.runId, t.seq)],
+);
+
+/** 👍/👎 feedback on a run (stored for future evaluation; not used automatically). */
+export const agentRunFeedback = pgTable(
+  "agent_run_feedback",
+  {
+    id: id(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references((): AnyPgColumn => users.id, { onDelete: "cascade" }),
+    rating: text("rating").notNull(),
+    note: text("note"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    unique("agent_run_feedback_uq").on(t.runId, t.userId),
+    check("agent_run_feedback_rating", sql`${t.rating} in ('useful','not_useful')`),
   ],
 );
 
@@ -1448,3 +1663,5 @@ export type Team = typeof teams.$inferSelect;
 export type Handoff = typeof handoffs.$inferSelect;
 export type RoleTemplate = typeof roleTemplates.$inferSelect;
 export type AgentRoleVersion = typeof agentRoleVersions.$inferSelect;
+export type AgentRun = typeof agentRuns.$inferSelect;
+export type AiModelPrice = typeof aiModelPrices.$inferSelect;

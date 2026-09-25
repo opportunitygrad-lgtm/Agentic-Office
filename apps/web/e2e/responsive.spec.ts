@@ -13,6 +13,7 @@ const ROUTES = [
   "/workforce/templates",
   "/workforce/teams",
   "/workforce/organisation",
+  "/settings/providers",
   "/tasks/active",
   "/live",
   "/approvals",

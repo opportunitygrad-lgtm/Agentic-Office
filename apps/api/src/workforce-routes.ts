@@ -5,7 +5,6 @@ import { GLOBAL_OPERATING_POLICY, PLATFORM_SAFETY_RULES } from "@aibos/agent-cor
 import {
   ForbiddenError,
   NotFoundError,
-  addConversationMessage,
   assignTask,
   canSeeKnowledge,
   getKnowledgeRecord,
@@ -63,7 +62,6 @@ import {
   agentHierarchySchema,
   assignTaskSchema,
   companyScopeQuery,
-  conversationMessageSchema,
   createAgentMessageSchema,
   createConversationSchema,
   createHandoffSchema,
@@ -769,16 +767,5 @@ export const workforceRoutes: FastifyPluginAsync = async (app) => {
     const { id } = idParam.parse(req.params);
     await getOwnConversation(db, id, principalOf(req).user.id);
     return { data: await listConversationMessages(db, id) };
-  });
-
-  app.post("/conversations/:id/messages", async (req, reply) => {
-    const { id } = idParam.parse(req.params);
-    const body = conversationMessageSchema.parse(req.body);
-    const c = await getOwnConversation(db, id, principalOf(req).user.id);
-    if (!can(principalOf(req).access, "conversation.create", c.companyId))
-      throw new ForbiddenError();
-    return reply
-      .status(201)
-      .send({ data: await addConversationMessage(db, id, body, actorFrom(req)) });
   });
 };

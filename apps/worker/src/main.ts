@@ -1,9 +1,12 @@
 import { Queue, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import pino from "pino";
-import { loadEnv, requireEnv } from "@aibos/db";
+import { createDb, loadEnv, requireEnv } from "@aibos/db";
+import { chatHistoryLimit, providerTimeoutMs } from "@aibos/execution-core";
+import { createProviderRegistry } from "@aibos/provider-core";
 import { QUEUE_NAMES } from "@aibos/shared";
 import { processAgentTask, writeHeartbeat, type AgentTaskJobData } from "./processors";
+import { createRunProcessor, recoverRuns, type AgentRunJobData } from "./runs";
 
 loadEnv();
 const logger = pino({
@@ -31,6 +34,33 @@ const systemWorker = new Worker(
   { connection: connection(), concurrency: 1 },
 );
 
+// Stage 05: real agent execution. Credentials stay in this server process only.
+const dbHandle = createDb(requireEnv("DATABASE_URL"));
+const registry = createProviderRegistry();
+const env = { registry, timeoutMs: providerTimeoutMs(), historyLimit: chatHistoryLimit() };
+const runQueue = new Queue<AgentRunJobData>(QUEUE_NAMES.agentRuns, { connection: connection() });
+const processRun = createRunProcessor({
+  db: dbHandle.db,
+  env,
+  redis,
+  subscriber: connection(),
+  logger,
+});
+const runWorker = new Worker<AgentRunJobData>(QUEUE_NAMES.agentRuns, (job) => processRun(job), {
+  connection: connection(),
+  concurrency,
+  // Long provider calls must not be treated as stalled while streaming.
+  lockDuration: 5 * 60_000,
+});
+await recoverRuns(dbHandle.db, runQueue, logger);
+logger.info(
+  {
+    mode: registry.mode,
+    claude: registry.get("CLAUDE").available() ? "configured" : "not configured",
+  },
+  "AI providers",
+);
+
 const agentWorker = new Worker<AgentTaskJobData>(
   QUEUE_NAMES.agentTasks,
   async (job) => {
@@ -41,7 +71,7 @@ const agentWorker = new Worker<AgentTaskJobData>(
   { connection: connection(), concurrency },
 );
 
-for (const w of [systemWorker, agentWorker]) {
+for (const w of [systemWorker, agentWorker, runWorker]) {
   w.on("failed", (job, err) => logger.error({ job: job?.id, err }, "job failed"));
   w.on("error", (err) => logger.error({ err }, "worker error"));
 }
@@ -54,7 +84,14 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   logger.info({ signal }, "shutting down worker");
-  await Promise.allSettled([systemWorker.close(), agentWorker.close(), systemQueue.close()]);
+  await Promise.allSettled([
+    systemWorker.close(),
+    agentWorker.close(),
+    runWorker.close(),
+    systemQueue.close(),
+    runQueue.close(),
+  ]);
+  await dbHandle.close();
   redis.disconnect();
   process.exit(0);
 }

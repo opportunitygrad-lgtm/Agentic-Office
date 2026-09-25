@@ -1,75 +1,151 @@
-import type { ProviderCapability, ProviderType } from "@aibos/shared";
+import type {
+  EffortLevel,
+  ProviderCapability,
+  ProviderErrorCode,
+  ProviderHealthState,
+  ProviderType,
+} from "@aibos/shared";
 
-export interface ProviderMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+/**
+ * Provider-neutral execution contract. The OS orchestrates (tasks, context,
+ * instructions, budgets, audit); a provider only turns a prepared request into
+ * a response. Nothing outside provider adapters depends on a vendor SDK.
+ */
+
+/** A system/instruction block. `cache` marks stable content worth caching. */
+export interface SystemBlock {
+  text: string;
+  cache: boolean;
 }
 
-export interface ProviderTaskRequest {
-  /** Correlates the call with tasks / audit events / cost ledger rows. */
-  requestId: string;
-  taskId?: string;
-  agentId?: string;
-  companyId?: string;
-  model?: string;
-  capability: ProviderCapability;
+export interface ProviderMessage {
+  role: "user" | "assistant";
+  content: string;
+  /** Mark the end of a stable prefix (e.g. the context pack) as cacheable. */
+  cache?: boolean;
+}
+
+export type OutputSpec =
+  { kind: "text" } | { kind: "structured"; name: string; schema: Record<string, unknown> };
+
+export interface ProviderRequest {
+  runId: string;
+  model: string;
+  effort: EffortLevel | null;
+  system: SystemBlock[];
   messages: ProviderMessage[];
-  maxOutputTokens?: number;
-  /** Hard ceiling in USD; providers must refuse work estimated above it. */
-  budgetUsd?: number;
+  output: OutputSpec;
+  maxOutputTokens: number;
+  timeoutMs: number;
   signal?: AbortSignal;
 }
 
 export interface ProviderUsage {
   inputTokens: number;
   outputTokens: number;
-  cachedTokens: number;
-  toolCostUsd: number;
-  providerCostUsd: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
 }
 
-export interface ProviderTaskResult {
+export interface ProviderResult {
   provider: ProviderType;
   model: string;
-  output: string;
+  /** Final visible text (never hidden reasoning). */
+  text: string;
+  /** Parsed JSON for structured output (validated later by the caller). */
+  structured: unknown;
+  stopReason: string | null;
+  requestId: string | null;
   usage: ProviderUsage;
-  finishReason: "completed" | "cancelled" | "budget_exceeded" | "error";
   latencyMs: number;
+}
+
+export interface StreamHandlers {
+  /** The provider accepted the request and started streaming. */
+  onStart?(): void;
+  /** Visible output text deltas only. */
+  onText?(delta: string): void;
+}
+
+export interface ProviderHealthResult {
+  provider: ProviderType;
+  state: ProviderHealthState;
+  checkedAt: Date;
+  detail: string | null;
+}
+
+export interface ModelPrice {
+  provider: ProviderType;
+  model: string;
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheWritePerMTok: number;
+  cacheReadPerMTok: number;
+  currency: "USD";
+  effectiveFrom: string;
+  source?: string | null;
 }
 
 export interface CostEstimate {
   provider: ProviderType;
   model: string;
-  estimatedInputTokens: number;
-  estimatedOutputTokens: number;
-  estimatedCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
 }
 
-export interface ProviderHealth {
-  provider: ProviderType;
-  status: "ok" | "degraded" | "down" | "not_configured";
-  checkedAt: Date;
-  detail?: string;
-}
-
-/**
- * The single contract every AI provider must satisfy. The OS depends only on
- * this interface — never on a vendor SDK — so providers stay replaceable.
- */
 export interface AIProvider {
-  readonly type: ProviderType;
+  readonly providerId: ProviderType;
   readonly displayName: string;
-  readonly defaultModel: string;
-  executeTask(request: ProviderTaskRequest): Promise<ProviderTaskResult>;
-  estimateCost(request: ProviderTaskRequest): CostEstimate;
-  supportsCapability(capability: ProviderCapability): boolean;
-  cancel(requestId: string): Promise<void>;
-  healthCheck(): Promise<ProviderHealth>;
+  /** True for deterministic development/test providers (clearly labelled in the UI). */
+  readonly isMock: boolean;
+  /** Credentials/configuration present — never makes a network call. */
+  available(): boolean;
+  /**
+   * Health without network I/O by default. `probe: true` performs the smallest
+   * supported authenticated operation (explicit Test Connection only).
+   */
+  healthCheck(opts?: {
+    probe?: boolean;
+    model?: string;
+    signal?: AbortSignal;
+  }): Promise<ProviderHealthResult>;
+  capabilities(): ProviderCapability[];
+  supportedModels(): string[];
+  /** Local estimate — no provider call. */
+  estimate(
+    input: { model: string; inputTokens: number; maxOutputTokens: number },
+    price: ModelPrice | null,
+  ): CostEstimate;
+  execute(request: ProviderRequest): Promise<ProviderResult>;
+  stream(request: ProviderRequest, handlers: StreamHandlers): Promise<ProviderResult>;
+  /** Abort an in-flight request started with this runId. */
+  cancel(runId: string): Promise<void>;
+  normalizeError(err: unknown): ProviderError;
 }
 
-export class ProviderNotConfiguredError extends Error {
-  constructor(provider: ProviderType) {
-    super(`${provider} provider is not configured (live calls arrive in a later stage)`);
-    this.name = "ProviderNotConfiguredError";
+/** Normalised provider error. Decisions use `code`/`retryable`, never messages. */
+export class ProviderError extends Error {
+  constructor(
+    readonly code: ProviderErrorCode,
+    message: string,
+    readonly opts: {
+      retryable?: boolean;
+      retryAfterMs?: number | null;
+      status?: number | null;
+      requestId?: string | null;
+      provider?: ProviderType;
+    } = {},
+  ) {
+    super(message);
+    this.name = "ProviderError";
+  }
+  get retryable(): boolean {
+    return this.opts.retryable ?? false;
+  }
+  get retryAfterMs(): number | null {
+    return this.opts.retryAfterMs ?? null;
   }
 }
+
+export const isProviderError = (e: unknown): e is ProviderError => e instanceof ProviderError;

@@ -11,6 +11,7 @@ export interface ServiceIdentityDefinition {
 
 export const SERVICE_IDENTITIES: readonly ServiceIdentityDefinition[] = [
   { key: "worker", name: "Worker", description: "Background queue worker" },
+  { key: "agent-worker", name: "Agent Worker", description: "Executes AI agent runs (Stage 05)" },
   { key: "scheduler", name: "Scheduler", description: "Scheduled jobs and follow-ups" },
   {
     key: "email-monitor",

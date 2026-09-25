@@ -10,7 +10,16 @@ export interface HealthProbe {
 const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T) =>
   Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
 
-export function createHealthProbe(db: DbHandle, redis: Redis | null): HealthProbe {
+/** Optional AI provider status (never calls the provider). */
+export interface ProviderHealthSource {
+  claude(): Promise<{ status: HealthState; detail: string }>;
+}
+
+export function createHealthProbe(
+  db: DbHandle,
+  redis: Redis | null,
+  providers?: ProviderHealthSource,
+): HealthProbe {
   return {
     async check() {
       const dbOk = await withTimeout(db.ping(), 2_000, false);
@@ -42,12 +51,23 @@ export function createHealthProbe(db: DbHandle, redis: Redis | null): HealthProb
         { name: "PostgreSQL", status: (dbOk ? "ok" : "down") as HealthState },
         { name: "Redis", status: redisState },
         { name: "Worker", status: workerState, detail: workerDetail },
+        ...(providers
+          ? [
+              {
+                name: "Claude Provider",
+                ...(await providers.claude().catch(() => ({
+                  status: "unknown" as HealthState,
+                  detail: "Status unavailable",
+                }))),
+              },
+            ]
+          : []),
       ];
       const status: HealthState = services.some(
         (s) => s.name === "PostgreSQL" && s.status === "down",
       )
         ? "down"
-        : services.every((s) => s.status === "ok")
+        : services.every((s) => s.status === "ok" || s.status === "not_configured")
           ? "ok"
           : "degraded";
       return { status, checkedAt: new Date().toISOString(), services };

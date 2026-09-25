@@ -68,6 +68,10 @@ export const DEFAULT_AI_POLICY: Omit<CompanyAiPolicyDTO, "defaultProvider" | "up
   autoSendPolicy: "disabled",
   staleKnowledgePolicy: "exclude",
   customRules: [],
+  defaultModelTier: "standard",
+  premiumAllowed: false,
+  maxResponseDetail: "detailed",
+  fallbackAllowed: false,
 };
 
 function toAiPolicyDTO(company: Company, row: CompanyAiPolicy | undefined): CompanyAiPolicyDTO {
@@ -83,6 +87,10 @@ function toAiPolicyDTO(company: Company, row: CompanyAiPolicy | undefined): Comp
           autoSendPolicy: row.autoSendPolicy,
           staleKnowledgePolicy: row.staleKnowledgePolicy,
           customRules: row.customRules,
+          defaultModelTier: row.defaultModelTier,
+          premiumAllowed: row.premiumAllowed,
+          maxResponseDetail: row.maxResponseDetail,
+          fallbackAllowed: row.fallbackAllowed,
         }
       : DEFAULT_AI_POLICY),
     updatedAt: row?.updatedAt.toISOString() ?? null,

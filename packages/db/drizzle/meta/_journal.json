@@ -36,6 +36,13 @@
       "when": 1790297004523,
       "tag": "0004_stage04_workforce",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790303064742,
+      "tag": "0005_stage05_execution",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 The authoritative, ordered plan for AI Business OS. Each stage is delivered by one build prompt and is only marked COMPLETE when its acceptance criteria pass.
 
-Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
+Legend: **COMPLETE** · **BLOCKED** (implementation done, acceptance waiting on an external prerequisite) · **IN PROGRESS** · **PLANNED**
 
 | #   | Stage                                                               | Status   |
 | --- | ------------------------------------------------------------------- | -------- |
@@ -10,7 +10,7 @@ Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
 | 02  | Authentication, Users, Roles & Permission Engine                    | COMPLETE |
 | 03  | Company Profiles, Knowledge, Brand Rules & Agent Context Engine     | COMPLETE |
 | 04  | Agent Roles, Permanent Instructions, Teams & Delegation Engine      | COMPLETE |
-| 05  | AI Provider Router, Claude Integration & First Real Agent Execution | PLANNED  |
+| 05  | AI Provider Router, Claude Integration & First Real Agent Execution | BLOCKED  |
 | 06  | Task orchestration & handoffs                                       | PLANNED  |
 | 07  | Claude integration                                                  | PLANNED  |
 | 08  | OpenAI integration                                                  | PLANNED  |
@@ -111,10 +111,20 @@ Legend: **COMPLETE** · **IN PROGRESS** · **PLANNED**
 
 ## Stage 05 — AI Provider Router, Claude Integration & First Real Agent Execution
 
-- **Status:** PLANNED
+- **Status:** BLOCKED — implementation complete; live acceptance requires Anthropic credential.
 - **Objective:** Route compiled instruction packs and context packs to AI providers; Claude integration; first real, governed agent execution.
 - **Dependencies:** Stage 04
-- **Completion notes:** —
+- **Unblock:** add `ANTHROPIC_API_KEY` (or an approved bearer credential) to the local `.env`, restart, run `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live`. Mark COMPLETE only when that live smoke run succeeds.
+- **Completion notes:**
+  - Official Anthropic TypeScript SDK (Messages API, streaming, `output_config` effort + JSON-schema format, prompt caching, typed errors); no Claude Code CLI / Agent SDK. STANDARD = Claude Sonnet 5 (medium), PREMIUM = Claude Opus 5.5 (high, only when permitted); model IDs and efforts from env.
+  - `AIProvider` contract + registry: Claude live, deterministic `MockClaudeProvider`, OpenAI/Grok placeholders (`PROVIDER_NOT_CONFIGURED`, no silent fallback), LOCAL deterministic. Deterministic router with recorded reasons.
+  - `@aibos/execution-core`: authority/data message construction with injection boundaries, output-detail limits, ≤1 retry for transient typed errors honouring retry-after, timeouts, AbortSignal cancellation, durable response save, strict result validation, recovery (re-queue / NEEDS_REVIEW / finish saved response).
+  - `agent_runs` / `agent_run_events` / `agent_run_feedback` / `ai_model_prices` / `ai_provider_settings`; DB-level duplicate prevention, idempotency, reservations, leases; budget preflight across task/agent/company daily+monthly/provider/global (shared `evaluateBudget`); usage ledger with cache tokens and price snapshot (official pricing verified 2026-09-25); mock usage never counts as spend.
+  - Worker executes (BullMQ `agent-runs`); API only enqueues; SSE streaming via Redis; Stop via Redis cancel channel.
+  - UI: Run with agent (preview, tier/detail, live run panel, timeline, result, history, feedback), streamed Agent Chat with stop/retry/model indicator, Settings → AI Providers, company model policy, agent provider settings, live runs on Live Agents and Command Centre, real cost/usage with REAL/MOCK labels, manager run stats, Claude health row (Not configured ≠ error).
+  - Permissions: task.execute, agent.chat, agent.run.view, agent.run.stop, provider.view, provider.test, provider.settings.manage. Audit actions listed in DATA_MODEL.md.
+  - Tests: provider-core 15, execution-core 11, DB execution 13, API execution 11, web execution 7 (+ updated suites; 309 Vitest total), Playwright execution flows (mock mode) incl. run, chat, providers, isolation, stop; guarded `pnpm test:claude-live`.
+  - Live smoke: **not run** — no Anthropic credential in this environment.
 
 ## Stage 06 — Task orchestration & handoffs
 

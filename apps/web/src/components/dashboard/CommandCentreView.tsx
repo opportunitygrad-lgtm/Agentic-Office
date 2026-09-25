@@ -14,6 +14,7 @@ import { TaskList } from "./TaskList";
 import { UsagePanel } from "./UsagePanel";
 import { WorkforceOverview } from "./WorkforceOverview";
 import { ManagerStatsPanel } from "../workforce/ManagerStatsPanel";
+import { ActiveRuns } from "../execution/ActiveRuns";
 
 function PanelLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
@@ -90,6 +91,14 @@ export function CommandCentreView({
         <div className="min-w-0 space-y-4 xl:col-span-8">
           <WorkforceOverview workforce={summary.workforce} company={slug} />
           {managerStats && <ManagerStatsPanel stats={managerStats} />}
+          <Panel
+            id="agent-runs"
+            title="Live agent runs"
+            eyebrow="Real execution"
+            actions={<PanelLink href={withCompany("/live", slug)}>Live view</PanelLink>}
+          >
+            <ActiveRuns company={slug ?? undefined} />
+          </Panel>
           <Panel
             id="active-agents"
             title="Active agents"

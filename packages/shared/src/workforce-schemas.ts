@@ -102,6 +102,8 @@ export const workforcePolicySchema = z.strictObject({
     .max(24 * 90),
   tempAgentApprovalBudgetUsd: z.number().min(0).max(10_000),
   maxActiveTempAgentsPerCompany: z.number().int().min(0).max(200),
+  /** Stage 05: platform-wide daily AI spend ceiling (USD). */
+  globalDailyAiBudgetUsd: z.number().min(0).max(100_000).optional(),
 });
 export type WorkforcePolicyInput = z.infer<typeof workforcePolicySchema>;
 

@@ -37,24 +37,29 @@ export async function usageSummary(
     db
       .select({
         provider: aiUsageRecords.provider,
+        live: sql<boolean>`${aiUsageRecords.origin} = 'live'`,
         today: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)}), 0)::float8`,
         month: sql<number>`coalesce(sum(${aiUsageRecords.actualCost}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
         calls: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)})::int`,
+        callsToday: sql<number>`count(*) filter (where ${aiUsageRecords.occurredAt} >= ${ts(today)})::int`,
         input: sql<number>`coalesce(sum(${aiUsageRecords.inputTokens}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
         output: sql<number>`coalesce(sum(${aiUsageRecords.outputTokens}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
+        cacheRead: sql<number>`coalesce(sum(${aiUsageRecords.cacheReadTokens}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
+        cacheWrite: sql<number>`coalesce(sum(${aiUsageRecords.cacheCreationTokens}) filter (where ${aiUsageRecords.occurredAt} >= ${ts(month)}), 0)::float8`,
       })
       .from(aiUsageRecords)
       .where(and(...scope))
-      .groupBy(aiUsageRecords.provider),
+      .groupBy(aiUsageRecords.provider, sql`2`),
     db
       .select({
         provider: aiUsageRecords.provider,
         day: sql<string>`to_char(date_trunc('day', ${aiUsageRecords.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD')`,
+        live: sql<boolean>`${aiUsageRecords.origin} = 'live'`,
         total: sql<number>`sum(${aiUsageRecords.actualCost})::float8`,
       })
       .from(aiUsageRecords)
       .where(and(...scope, gte(aiUsageRecords.occurredAt, trendStart)))
-      .groupBy(aiUsageRecords.provider, sql`2`),
+      .groupBy(aiUsageRecords.provider, sql`2`, sql`3`),
     db
       .select({ live: sql<number>`count(*) filter (where ${aiUsageRecords.origin} = 'live')::int` })
       .from(aiUsageRecords)
@@ -77,23 +82,32 @@ export async function usageSummary(
   for (let i = 0; i < TREND_DAYS; i++) {
     days.push(new Date(trendStart.getTime() + i * 86_400_000).toISOString().slice(0, 10));
   }
+  // CLAUDE is real (live rows only). Providers not yet connected keep labelled mock rows.
+  const isLiveProvider = (p: ProviderType) => p === "CLAUDE";
+  const keep = (p: ProviderType, live: boolean) => (isLiveProvider(p) ? live : !live);
   const trendMap = new Map<string, number>();
-  for (const d of daily) trendMap.set(`${d.provider}|${d.day}`, d.total);
-  const byProvider = new Map(rows.map((r) => [r.provider, r] as const));
+  for (const d of daily)
+    if (keep(d.provider, d.live)) trendMap.set(`${d.provider}|${d.day}`, d.total);
 
   const round = (n: number) => Math.round(n * 100) / 100;
   const providers = PROVIDER_TYPES.map((p: ProviderType) => {
-    const r = byProvider.get(p);
+    const r = rows.find((x) => x.provider === p && keep(p, x.live));
     return {
       provider: p,
+      isMock: !isLiveProvider(p),
       todayUsd: round(r?.today ?? 0),
       monthUsd: round(r?.month ?? 0),
       calls: r?.calls ?? 0,
+      callsToday: r?.callsToday ?? 0,
       inputTokens: r?.input ?? 0,
       outputTokens: r?.output ?? 0,
+      cacheReadTokens: r?.cacheRead ?? 0,
+      cacheCreationTokens: r?.cacheWrite ?? 0,
+      averageCallUsd: r && r.calls ? Math.round((r.month / r.calls) * 10_000) / 10_000 : null,
       trend: days.map((d) => round(trendMap.get(`${p}|${d}`) ?? 0)),
     };
   });
+  const liveRows = rows.filter((x) => x.live);
 
   return {
     isMock: (originRows[0]?.live ?? 0) === 0,
@@ -102,6 +116,8 @@ export async function usageSummary(
     monthlyBudgetUsd: budgets[0]?.monthly ?? 0,
     todayUsd: round(providers.reduce((s, p) => s + p.todayUsd, 0)),
     monthUsd: round(providers.reduce((s, p) => s + p.monthUsd, 0)),
+    liveTodayUsd: round(liveRows.reduce((s, r) => s + r.today, 0)),
+    liveMonthUsd: round(liveRows.reduce((s, r) => s + r.month, 0)),
     providers,
   };
 }

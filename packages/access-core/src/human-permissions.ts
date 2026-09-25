@@ -109,6 +109,34 @@ const CATEGORIES: { category: string; permissions: Omit<PermissionDefinition, "c
     ],
   },
   {
+    category: "AI Execution",
+    permissions: [
+      p(
+        "task.execute",
+        "Run tasks with AI",
+        "Start a real AI agent run for a task (budget and policy still apply).",
+      ),
+      p("agent.chat", "Chat with agents", "Send messages that an AI agent answers."),
+      p("agent.run.view", "View agent runs", "See agent runs, live output, usage and results."),
+      p("agent.run.stop", "Stop agent runs", "Stop a running agent run."),
+      p(
+        "provider.view",
+        "View AI providers",
+        "See AI provider connection status, models and spend.",
+      ),
+      p("provider.test", "Test AI providers", "Run the minimal provider connection test.", {
+        scope: "global",
+        sensitive: true,
+      }),
+      p(
+        "provider.settings.manage",
+        "Manage AI provider settings",
+        "Change provider models, effort defaults and provider budgets.",
+        { scope: "global", sensitive: true },
+      ),
+    ],
+  },
+  {
     category: "Tasks",
     permissions: [
       p("task.view", "View tasks", "See tasks and their progress."),

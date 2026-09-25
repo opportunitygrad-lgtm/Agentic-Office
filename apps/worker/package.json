@@ -12,6 +12,7 @@
   "dependencies": {
     "@aibos/agent-core": "workspace:*",
     "@aibos/db": "workspace:*",
+    "@aibos/execution-core": "workspace:*",
     "@aibos/provider-core": "workspace:*",
     "@aibos/shared": "workspace:*",
     "bullmq": "^6.3.8",

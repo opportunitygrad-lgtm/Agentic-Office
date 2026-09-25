@@ -4,6 +4,12 @@ import { Panel } from "@aibos/ui";
 /** Manager dashboard: how work was routed over the last 30 days (from recorded decisions). */
 export function ManagerStatsPanel({ stats }: { stats: ManagerStatsDTO }) {
   const items: [string, number | string][] = [
+    ["Real runs today", stats.runsToday],
+    ["Completed today", stats.runsCompletedToday],
+    ["Failed today", stats.runsFailedToday],
+    ["Runs in progress", stats.runsInProgress],
+    ["Provider spend today", `$${stats.providerSpendTodayUsd.toFixed(2)}`],
+    ["Agents executing", stats.agentsExecuting],
     ["Tasks received", stats.tasksReceived],
     ["Handled directly", stats.handledDirectly],
     ["Delegated", stats.delegated],

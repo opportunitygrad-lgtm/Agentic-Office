@@ -18,6 +18,9 @@ import {
 } from "@aibos/shared";
 import { Button, Panel, cn } from "@aibos/ui";
 import { SelectField, TagInput, TextField } from "../wizard/fields";
+
+/** Providers without a live adapter yet (Stage 05): shown, never presented as usable. */
+const NOT_CONNECTED: string[] = ["OPENAI", "GROK"];
 import { SensitivityBadge } from "../knowledge/badges";
 import { hasPermission, useMe } from "../shell/SessionContext";
 import { clientApi } from "@/lib/client-api";
@@ -96,7 +99,10 @@ export function AiPolicyPanel({
               <SelectField
                 label="Preferred provider"
                 value={p.defaultProvider}
-                options={PROVIDER_TYPES.map((v) => ({ value: v, label: PROVIDER_LABELS[v] }))}
+                options={PROVIDER_TYPES.map((v) => ({
+                  value: v,
+                  label: `${PROVIDER_LABELS[v]}${NOT_CONNECTED.includes(v) ? " (not connected)" : ""}`,
+                }))}
                 onChange={(e) => setP({ ...p, defaultProvider: e.target.value as ProviderType })}
               />
               <fieldset>
@@ -123,6 +129,9 @@ export function AiPolicyPanel({
                         )}
                       >
                         {PROVIDER_LABELS[v]}
+                        {NOT_CONNECTED.includes(v) && (
+                          <span className="ml-1 opacity-70">(not connected)</span>
+                        )}
                       </button>
                     );
                   })}
@@ -146,6 +155,76 @@ export function AiPolicyPanel({
                 </span>
               ))}
             </div>
+          )}
+        </div>
+
+        <div data-testid="model-policy">
+          <p className="mb-2 text-[12px] text-fg-faint">Model policy</p>
+          {editing ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <SelectField
+                label="Default model tier"
+                value={p.defaultModelTier}
+                options={[
+                  { value: "standard", label: "Standard (Claude Sonnet 5)" },
+                  { value: "auto", label: "Auto (premium only for high-complexity tasks)" },
+                  { value: "premium", label: "Premium (Claude Opus 5.5)" },
+                ]}
+                onChange={(e) =>
+                  setP({ ...p, defaultModelTier: e.target.value as typeof p.defaultModelTier })
+                }
+              />
+              <SelectField
+                label="Maximum response detail"
+                value={p.maxResponseDetail}
+                options={[
+                  { value: "short", label: "Short" },
+                  { value: "normal", label: "Normal" },
+                  { value: "detailed", label: "Detailed" },
+                  { value: "custom", label: "Custom" },
+                ]}
+                onChange={(e) =>
+                  setP({ ...p, maxResponseDetail: e.target.value as typeof p.maxResponseDetail })
+                }
+              />
+              <label className="flex items-center gap-2 text-[12.5px]">
+                <input
+                  type="checkbox"
+                  checked={p.premiumAllowed}
+                  onChange={(e) => setP({ ...p, premiumAllowed: e.target.checked })}
+                />
+                Premium model allowed
+              </label>
+              <label className="flex items-center gap-2 text-[12.5px]">
+                <input
+                  type="checkbox"
+                  checked={p.fallbackAllowed}
+                  onChange={(e) => setP({ ...p, fallbackAllowed: e.target.checked })}
+                />
+                Allow fallback to the agent&apos;s fallback provider
+              </label>
+            </div>
+          ) : (
+            <dl className="grid grid-cols-2 gap-2 text-[12.5px] sm:grid-cols-4">
+              <div>
+                <dt className="text-fg-faint">Default tier</dt>
+                <dd className="font-medium capitalize">{policy.defaultModelTier}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Premium allowed</dt>
+                <dd className="font-medium">{policy.premiumAllowed ? "Yes" : "No"}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Max response detail</dt>
+                <dd className="font-medium capitalize">{policy.maxResponseDetail}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Provider fallback</dt>
+                <dd className="font-medium">
+                  {policy.fallbackAllowed ? "Allowed" : "Not allowed"}
+                </dd>
+              </div>
+            </dl>
           )}
         </div>
 

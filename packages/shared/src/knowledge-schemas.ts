@@ -148,6 +148,11 @@ export const aiPolicySchema = z
     autoSendPolicy: z.enum(AI_POLICY_MODES),
     staleKnowledgePolicy: z.enum(STALE_KNOWLEDGE_POLICIES),
     customRules: list(30, 500),
+    /** Stage 05 provider policy (optional so older clients keep working; no defaults on edit). */
+    defaultModelTier: z.enum(["standard", "premium", "auto"]).optional(),
+    premiumAllowed: z.boolean().optional(),
+    maxResponseDetail: z.enum(["short", "normal", "detailed", "custom"]).optional(),
+    fallbackAllowed: z.boolean().optional(),
   })
   .refine((v) => v.allowedProviders.includes(v.defaultProvider), {
     message: "The default provider must be one of the allowed providers",

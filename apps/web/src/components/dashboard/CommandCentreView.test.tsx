@@ -32,7 +32,11 @@ describe("CommandCentreView", () => {
     );
 
     const usage = screen.getByRole("region", { name: "AI usage" });
-    expect(within(usage).getByText("Mock data")).toBeInTheDocument();
+    expect(within(usage).getByText("Includes mock data")).toBeInTheDocument();
+    // Real Claude usage is labelled separately from mock providers.
+    expect(within(usage).getAllByText("REAL")).toHaveLength(1);
+    expect(within(usage).getAllByText("MOCK")).toHaveLength(3);
+    expect(within(usage).getByTestId("claude-usage")).toHaveTextContent("Cache reads (month)500");
     for (const p of ["Claude", "OpenAI", "Grok", "Local logic"])
       expect(within(usage).getByText(p)).toBeInTheDocument();
 

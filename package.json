@@ -28,7 +28,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "auth:bootstrap": "pnpm --filter @aibos/db auth:bootstrap"
+    "auth:bootstrap": "pnpm --filter @aibos/db auth:bootstrap",
+    "test:claude-live": "pnpm --filter @aibos/db claude:live"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

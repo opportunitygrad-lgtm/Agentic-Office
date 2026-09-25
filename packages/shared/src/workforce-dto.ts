@@ -140,6 +140,7 @@ export interface WorkforcePolicyDTO {
   tempAgentMaxExpiryHours: number;
   tempAgentApprovalBudgetUsd: number;
   maxActiveTempAgentsPerCompany: number;
+  globalDailyAiBudgetUsd: number;
   updatedAt: string | null;
 }
 
@@ -424,10 +425,24 @@ export interface ConversationMessageDTO {
   author: string;
   content: string;
   createdAt: string;
+  /** Agent replies (Stage 05): the run that produced them. */
+  runId: string | null;
+  runStatus: string | null;
+  provider: string | null;
+  model: string | null;
 }
 
 export interface ManagerStatsDTO {
   manager: { id: string; name: string } | null;
+  /** Stage 05 real execution (today, UTC). */
+  runsToday: number;
+  mockRunsToday: number;
+  runsCompletedToday: number;
+  runsFailedToday: number;
+  runsInProgress: number;
+  providerSpendTodayUsd: number;
+  /** Agents with a provider call in progress right now. */
+  agentsExecuting: number;
   tasksReceived: number;
   handledDirectly: number;
   delegated: number;

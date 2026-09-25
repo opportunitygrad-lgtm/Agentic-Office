@@ -1,0 +1,157 @@
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+
+test.describe.configure({ mode: "serial" });
+
+/**
+ * Stage 05 execution flows. Deterministic: runs ONLY against a stack started
+ * with AIBOS_AI_PROVIDER_MODE=mock (the worker uses MockClaudeProvider), so
+ * `pnpm test:e2e` never consumes Claude credit. Live checks live in
+ * `pnpm test:claude-live` behind ALLOW_LIVE_AI_TESTS=true.
+ */
+const PASSWORD = "aibos-dev-only-password";
+const ORIGIN = { origin: "http://localhost:3000" };
+
+/**
+ * One real sign-in per user for the whole file (the login throttle allows 30
+ * per IP per 15 minutes); later tests reuse the saved session cookies.
+ */
+const sessions = new Map<string, Awaited<ReturnType<BrowserContext["storageState"]>>>();
+async function signIn(page: Page, email: string) {
+  const saved = sessions.get(email);
+  if (saved) {
+    await page.context().clearCookies();
+    await page.context().addCookies(saved.cookies);
+    await page.goto("/");
+    return;
+  }
+  await page.context().clearCookies();
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((u) => !u.pathname.startsWith("/login"));
+  sessions.set(email, await page.context().storageState());
+}
+
+async function requireMock(page: Page) {
+  const res = await page.request.get("/api/v1/providers");
+  const body = (await res.json()) as { mode?: string };
+  test.skip(
+    body.mode !== "mock",
+    "Execution E2E runs only with AIBOS_AI_PROVIDER_MODE=mock (no live AI in automated suites)",
+  );
+}
+
+async function newAssignedTask(page: Page, title: string) {
+  const tasks = (await (
+    await page.request.get("/api/v1/companies/euro-pilot-training")
+  ).json()) as { data: { id: string } };
+  const created = (await (
+    await page.request.post("/api/v1/tasks", {
+      data: {
+        companyId: tasks.data.id,
+        title,
+        description:
+          "Produce a short internal operational brief. Do not perform external research.",
+        type: "custom",
+        onDuplicate: "create",
+      },
+      headers: ORIGIN,
+    })
+  ).json()) as { data: { task: { id: string } } };
+  const agents = (await (
+    await page.request.get("/api/v1/agents?q=EPT%20Company%20Manager")
+  ).json()) as { data: { id: string; name: string }[] };
+  const manager = agents.data.find((a) => a.name === "EPT Company Manager")!;
+  await page.request.post(`/api/v1/tasks/${created.data.task.id}/assign`, {
+    data: { agentId: manager.id },
+    headers: ORIGIN,
+  });
+  return { taskId: created.data.task.id, managerId: manager.id };
+}
+
+test("task run: preview → run in worker → live timeline → result → history → feedback", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { taskId } = await newAssignedTask(page, `E2E brief ${Date.now()}`);
+  await page.goto(`/tasks/item/${taskId}`);
+  const preview = page.getByTestId("provider-preview");
+  await expect(preview).toContainText("Claude Sonnet 5");
+  await expect(preview).toContainText(/medium/i);
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByTestId("live-run-panel")).toBeVisible();
+  await expect(page.getByTestId("run-result")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("run-timeline")).toContainText("Usage recorded");
+  await expect(page.getByTestId("run-history")).toContainText("#1");
+  await page.getByRole("button", { name: "Useful", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Useful", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("agent chat: streamed reply with model indicator; company shown", async ({ page }) => {
+  test.setTimeout(120_000);
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { managerId } = await newAssignedTask(page, `E2E chat ${Date.now()}`);
+  await page.goto(`/workforce/agents/${managerId}?tab=chat`);
+  await page.waitForLoadState("networkidle");
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect(page.getByText(/Company: Euro Pilot Training/)).toBeVisible();
+  await page.getByLabel("Message", { exact: true }).fill("What is your current responsibility?");
+  await page.getByRole("button", { name: "Send" }).click();
+  const messages = page.getByTestId("chat-messages");
+  await expect(messages).toContainText("Claude Sonnet 5", { timeout: 60_000 });
+  await expect(messages).toContainText("What is your current responsibility?");
+});
+
+test("provider settings: status visible, test connection limited to platform roles, no credentials", async ({
+  page,
+}) => {
+  await signIn(page, "ept.manager@aibos.example");
+  await page.goto("/settings/providers");
+  await expect(page.getByTestId("provider-CLAUDE")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Test Claude connection" })).toHaveCount(0);
+  const html = await page.content();
+  expect(html).not.toMatch(/sk-ant|ANTHROPIC_API_KEY=/);
+  expect(
+    (await page.request.post("/api/v1/providers/CLAUDE/test", { headers: ORIGIN })).status(),
+  ).toBe(403);
+});
+
+test("company isolation: another company's manager cannot run or view EPT runs", async ({
+  page,
+}) => {
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { taskId } = await newAssignedTask(page, `E2E isolation ${Date.now()}`);
+  const run = (await (
+    await page.request.post(`/api/v1/tasks/${taskId}/runs`, { data: {}, headers: ORIGIN })
+  ).json()) as { data: { run: { id: string } } };
+  await signIn(page, "pa.manager@aibos.example");
+  expect(
+    (
+      await page.request.post(`/api/v1/tasks/${taskId}/runs`, { data: {}, headers: ORIGIN })
+    ).status(),
+  ).toBe(404);
+  expect((await page.request.get(`/api/v1/runs/${run.data.run.id}`)).status()).toBe(404);
+});
+
+test("stop run: cancellation reaches the worker and the run ends CANCELLED", async ({ page }) => {
+  test.setTimeout(120_000);
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { taskId } = await newAssignedTask(page, `E2E stop ${Date.now()}`);
+  await page.goto(`/tasks/item/${taskId}`);
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  const panel = page.getByTestId("live-run-panel");
+  await expect(panel).toBeVisible();
+  await page.getByRole("button", { name: /^Stop/ }).first().click();
+  await expect(page.getByTestId("run-history")).toContainText(/Stopped|Cancelled/i, {
+    timeout: 60_000,
+  });
+});

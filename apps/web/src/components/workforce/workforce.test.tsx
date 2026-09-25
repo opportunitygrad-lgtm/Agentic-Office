@@ -477,6 +477,13 @@ describe("ManagerStatsPanel", () => {
       <ManagerStatsPanel
         stats={{
           manager: { id: "m", name: "EPT Company Manager" },
+          runsToday: 4,
+          mockRunsToday: 1,
+          runsCompletedToday: 3,
+          runsFailedToday: 1,
+          runsInProgress: 1,
+          providerSpendTodayUsd: 0.12,
+          agentsExecuting: 1,
           tasksReceived: 7,
           handledDirectly: 2,
           delegated: 5,

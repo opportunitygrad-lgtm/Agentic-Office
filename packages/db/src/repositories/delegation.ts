@@ -30,6 +30,7 @@ import { ConflictError, ForbiddenError, NotFoundError } from "../errors";
 import {
   agentCompanyAssignments,
   agentMessages,
+  agentRuns,
   agents,
   aiUsageRecords,
   approvals,
@@ -1085,8 +1086,33 @@ export async function managerStats(
       ),
     )
     .limit(1);
+  // Stage 05: real execution figures (today, UTC). Mock runs are labelled, never counted as spend.
+  const day = new Date();
+  day.setUTCHours(0, 0, 0, 0);
+  const runScope = opts.companyId
+    ? eq(agentRuns.companyId, opts.companyId)
+    : scopeWhere(agentRuns.companyId, opts.scope);
+  const [runs] = await db
+    .select({
+      today: sql<number>`count(*) filter (where ${agentRuns.createdAt} >= ${day.toISOString()}::timestamptz and not ${agentRuns.isMock})::int`,
+      mockToday: sql<number>`count(*) filter (where ${agentRuns.createdAt} >= ${day.toISOString()}::timestamptz and ${agentRuns.isMock})::int`,
+      completed: sql<number>`count(*) filter (where ${agentRuns.createdAt} >= ${day.toISOString()}::timestamptz and ${agentRuns.status} = 'completed')::int`,
+      failed: sql<number>`count(*) filter (where ${agentRuns.createdAt} >= ${day.toISOString()}::timestamptz and ${agentRuns.status} in ('failed','needs_review'))::int`,
+      waiting: sql<number>`count(*) filter (where ${agentRuns.status} in ('queued','preparing','routing','running','streaming','waiting','cancel_requested'))::int`,
+      spend: sql<number>`coalesce(sum(${agentRuns.actualCost}) filter (where ${agentRuns.createdAt} >= ${day.toISOString()}::timestamptz and not ${agentRuns.isMock}), 0)::float8`,
+      activeAgents: sql<number>`count(distinct ${agentRuns.agentId}) filter (where ${agentRuns.status} in ('preparing','routing','running','streaming'))::int`,
+    })
+    .from(agentRuns)
+    .where(runScope);
   return {
     manager: manager ?? null,
+    runsToday: runs?.today ?? 0,
+    mockRunsToday: runs?.mockToday ?? 0,
+    runsCompletedToday: runs?.completed ?? 0,
+    runsFailedToday: runs?.failed ?? 0,
+    runsInProgress: runs?.waiting ?? 0,
+    providerSpendTodayUsd: Math.round((runs?.spend ?? 0) * 10_000) / 10_000,
+    agentsExecuting: runs?.activeAgents ?? 0,
     tasksReceived: deleg?.received ?? 0,
     handledDirectly: deleg?.self ?? 0,
     delegated: deleg?.delegated ?? 0,
