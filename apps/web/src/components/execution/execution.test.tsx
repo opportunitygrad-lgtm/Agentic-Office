@@ -101,18 +101,23 @@ const provider = (over: Partial<ProviderStatusDTO>): ProviderStatusDTO => ({
 });
 
 describe("Provider settings", () => {
-  it("shows Claude not configured (not an error), disconnected OpenAI/Grok and never any credential", () => {
+  it("shows Claude not configured (not an error), OpenAI Codex not yet checked, Grok disconnected and never any credential", () => {
     render(
       <SessionProvider me={ME_OWNER}>
         <ProviderSettings
           providers={[
             provider({}),
+            // Stage 06 default: OPENAI reaches Codex CLI, on the same
+            // subscription-first footing as Claude Code — never an API key.
             provider({
               provider: "OPENAI",
               label: "OpenAI",
-              detail: "Not connected in this stage",
-              standardModel: null,
-              premiumModel: null,
+              detail: "OpenAI Codex has not been checked yet — click TEST CODEX CONNECTION.",
+              transport: "codex_cli",
+              authMode: "subscription_login",
+              billingMode: "subscription",
+              standardModel: "auto",
+              premiumModel: "auto",
               prices: [],
             }),
             provider({
@@ -130,8 +135,14 @@ describe("Provider settings", () => {
     const claude = screen.getByTestId("provider-CLAUDE");
     expect(claude).toHaveTextContent("Anthropic credential not configured");
     expect(claude).toHaveTextContent("claude-sonnet-5");
-    expect(screen.getAllByText("Not configured")).toHaveLength(3);
-    expect(screen.getByTestId("provider-OPENAI")).toHaveTextContent(
+    // 3 status pills + one extra "Status" row inside OpenAI's subscription facts table.
+    expect(screen.getAllByText("Not configured")).toHaveLength(4);
+    const openai = screen.getByTestId("provider-OPENAI");
+    expect(openai).toHaveTextContent("OpenAI Codex has not been checked yet");
+    expect(screen.getByTestId("codex-cli-setup")).toHaveTextContent(
+      "OpenAI Codex has not been checked yet.",
+    );
+    expect(screen.getByTestId("provider-GROK")).toHaveTextContent(
       "Not connected — arrives in a later stage",
     );
     expect(document.body.textContent).not.toMatch(/sk-ant/);
@@ -204,6 +215,8 @@ const run = (over: Partial<AgentRunDetailDTO> = {}): AgentRunDetailDTO => ({
   number: 1,
   executionType: "task",
   status: "streaming",
+  purpose: "primary",
+  reviewedRunId: null,
   company: ept,
   task: { id: "t1", title: "Operational brief" },
   agent: { id: "a1", name: "EPT Company Manager" },
@@ -241,8 +254,9 @@ const run = (over: Partial<AgentRunDetailDTO> = {}): AgentRunDetailDTO => ({
   phase: "Generating result",
   feedback: null,
   proposals: { handoffs: 0, knowledgeDrafts: 0 },
-  viewer: { canStop: true, canFeedback: false },
+  viewer: { canStop: true, canFeedback: false, canRequestReview: false },
   events: [],
+  review: null,
   ...over,
 });
 
@@ -380,6 +394,122 @@ describe("Claude Code subscription provider", () => {
   });
 });
 
+describe("OpenAI Codex subscription provider", () => {
+  const codex = (over: Partial<ProviderStatusDTO>) =>
+    provider({
+      provider: "OPENAI",
+      label: "OpenAI",
+      transport: "codex_cli",
+      authMode: "subscription_login",
+      billingMode: "subscription",
+      standardModel: "auto",
+      premiumModel: "auto",
+      cli: {
+        binary: "codex",
+        version: "0.157.0",
+        authMethod: "chatgpt",
+        subscriptionType: "plus",
+        maxConcurrency: 1,
+      },
+      prices: [],
+      ...over,
+    });
+  const owner = {
+    ...ME_OWNER,
+    globalPermissions: [...ME_OWNER.globalPermissions, "provider.test", "provider.settings.manage"],
+  };
+
+  it("shows the OpenAI Codex card: ChatGPT subscription, Codex CLI transport, included billing, API key not used", () => {
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings
+          providers={[
+            codex({
+              connected: true,
+              state: "available",
+              detail: "Codex 0.157.0 signed in with a ChatGPT subscription",
+              runsToday: 2,
+            }),
+          ]}
+        />
+      </SessionProvider>,
+    );
+    const card = screen.getByTestId("codex-cli-facts");
+    for (const text of [
+      "Plus subscription", // the reported ChatGPT plan name, like Claude's "Pro subscription"
+      "Local Codex CLI",
+      "Connected",
+      "Auto",
+      "Included subscription usage",
+      "Not used",
+    ])
+      expect(card).toHaveTextContent(text);
+    expect(screen.getByRole("button", { name: "Test Codex Connection" })).toBeEnabled();
+    expect(screen.queryByTestId("codex-cli-setup")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Enter API Key|OPENAI_API_KEY/i);
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it("guides login in Terminal when Codex is not authenticated (never asks for credentials)", () => {
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings
+          providers={[
+            codex({
+              state: "login_required",
+              detail: "Login required. Open Terminal and run: codex",
+            }),
+          ]}
+        />
+      </SessionProvider>,
+    );
+    const setup = screen.getByTestId("codex-cli-setup");
+    expect(setup).toHaveTextContent("OpenAI Codex is not authenticated.");
+    expect(setup).toHaveTextContent("Open Terminal.");
+    expect(setup).toHaveTextContent("codex");
+    expect(setup).toHaveTextContent("Sign in with your ChatGPT account.");
+    expect(screen.getAllByText("Login required").length).toBeGreaterThan(0);
+    expect(document.querySelector("input[type='password']")).toBeNull();
+  });
+
+  it("shows a ChatGPT usage-limit state without ever switching to API billing", () => {
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings
+          providers={[
+            codex({
+              state: "rate_limited",
+              connected: false,
+              rateLimit: { status: "rejected", resetsAt: null, type: null },
+            }),
+          ]}
+        />
+      </SessionProvider>,
+    );
+    expect(screen.getByTestId("codex-cli-facts")).toHaveTextContent(
+      "ChatGPT plan usage limit reached",
+    );
+    // No leaked key value and no password-style credential field anywhere.
+    expect(document.body.textContent).not.toMatch(/OPENAI_API_KEY=|sk-[a-zA-Z0-9]/);
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it("tests the Codex connection when connected", async () => {
+    const fn = stubApi([
+      ["/test", { data: { state: "available", detail: "Connection verified" } }, 200, "POST"],
+    ]);
+    const u = userEvent.setup();
+    render(
+      <SessionProvider me={owner}>
+        <ProviderSettings providers={[codex({ connected: true, state: "available" })]} />
+      </SessionProvider>,
+    );
+    await u.click(screen.getByRole("button", { name: "Test Codex Connection" }));
+    expect(await screen.findByText(/Test result: available/)).toBeInTheDocument();
+    expect(calls(fn, "POST", "/v1/providers/OPENAI/test")).toHaveLength(1);
+  });
+});
+
 describe("Task run panel", () => {
   it("previews provider/model/effort/cost, runs, streams live output and shows the result", async () => {
     const fn = stubApi([
@@ -393,7 +523,7 @@ describe("Task run panel", () => {
             status: "completed",
             result: RESULT,
             feedback: { rating: "useful", note: null, by: null },
-            viewer: { canStop: false, canFeedback: true },
+            viewer: { canStop: false, canFeedback: true, canRequestReview: false },
           }),
         },
         200,
@@ -444,7 +574,7 @@ describe("Task run panel", () => {
           cacheCreationTokens: 1200,
           cacheReadTokens: 0,
         },
-        viewer: { canStop: false, canFeedback: true },
+        viewer: { canStop: false, canFeedback: true, canRequestReview: false },
       }),
     });
     expect(await screen.findByTestId("run-result")).toHaveTextContent(
@@ -555,7 +685,7 @@ describe("Task run panel", () => {
           status: "failed",
           errorCode: "RATE_LIMITED",
           errorMessage: "Provider rate limit reached",
-          viewer: { canStop: false, canFeedback: false },
+          viewer: { canStop: false, canFeedback: false, canRequestReview: false },
         }),
       });
     expect(await screen.findByTestId("run-error")).toHaveTextContent(
@@ -650,5 +780,102 @@ describe("Agent chat", () => {
     const list = await screen.findByTestId("chat-messages");
     await waitFor(() => expect(list).toHaveTextContent("I manage EPT operations."));
     expect(list).toHaveTextContent("Claude Sonnet 5");
+  });
+});
+
+describe("second-opinion review UI", () => {
+  const REVIEW = {
+    agreementPoints: ["The response aligns with EPT's supplied context."],
+    disagreementPoints: ["The pricing figure is not directly supported by the context."],
+    possibleErrors: [],
+    missingConsiderations: ["Seasonal demand was not addressed."],
+    unsupportedClaims: [],
+    risks: ["Relying on this without further review could overstate confidence."],
+    suggestedCorrections: ["Add a caveat about seasonal variation."],
+    confidence: "medium" as const,
+    overallReviewSummary: "Mostly supported by context, with one gap worth flagging.",
+  };
+
+  it("shows an Ask OpenAI to review button on a completed Claude run when permitted, and requests it", async () => {
+    const fn = stubApi([
+      ["/review", { data: { status: "started", run: run({ provider: "OPENAI" }) } }, 201, "POST"],
+      ["/runs/run-1", { data: run({ status: "completed", result: RESULT }) }],
+    ]);
+    const u = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <LiveRunPanel
+        run={run({
+          status: "completed",
+          result: RESULT,
+          purpose: "primary",
+          viewer: { canStop: false, canFeedback: true, canRequestReview: true },
+        })}
+        output=""
+        onChange={onChange}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Ask OpenAI to review" });
+    await u.click(button);
+    expect(await screen.findByText(/Second-opinion review requested from OpenAI/)).toBeInTheDocument();
+    expect(calls(fn, "POST", "/v1/runs/run-1/review")).toHaveLength(1);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+  });
+
+  it("hides the ask-to-review button when the viewer lacks permission", () => {
+    render(
+      <LiveRunPanel
+        run={run({
+          status: "completed",
+          result: RESULT,
+          purpose: "primary",
+          viewer: { canStop: false, canFeedback: true, canRequestReview: false },
+        })}
+        output=""
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Ask .* to review/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the review card — separated from the original result, never merged — instead of the ask button once a review exists", () => {
+    render(
+      <LiveRunPanel
+        run={run({
+          status: "completed",
+          result: RESULT,
+          purpose: "primary",
+          review: REVIEW,
+          viewer: { canStop: false, canFeedback: true, canRequestReview: true },
+        })}
+        output=""
+      />,
+    );
+    expect(screen.getByTestId("run-result")).toHaveTextContent(RESULT.summary);
+    const card = screen.getByTestId("review-card");
+    expect(card).toHaveTextContent("Second opinion");
+    expect(card).toHaveTextContent("Mostly supported by context");
+    expect(card).toHaveTextContent("Seasonal demand was not addressed");
+    expect(card).toHaveTextContent("Add a caveat about seasonal variation");
+    expect(screen.queryByRole("button", { name: /Ask .* to review/ })).not.toBeInTheDocument();
+    // Never a "winner" verdict between providers.
+    expect(card.textContent).not.toMatch(/wins|winner/i);
+  });
+
+  it("labels a second-opinion run itself with a SECOND OPINION badge, not an ask-to-review button", () => {
+    render(
+      <LiveRunPanel
+        run={run({
+          status: "completed",
+          result: null,
+          provider: "OPENAI",
+          purpose: "second_opinion",
+          reviewedRunId: "run-0",
+          viewer: { canStop: false, canFeedback: false, canRequestReview: true },
+        })}
+        output=""
+      />,
+    );
+    expect(screen.getByTestId("run-purpose-badge")).toHaveTextContent("SECOND OPINION");
+    expect(screen.queryByRole("button", { name: /Ask .* to review/ })).not.toBeInTheDocument();
   });
 });

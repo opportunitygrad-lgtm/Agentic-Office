@@ -7,20 +7,35 @@ import {
   AI_POLICY_MODES,
   AI_POLICY_MODE_LABELS,
   PROVIDER_LABELS,
+  PROVIDER_SELECTION_MODES,
   PROVIDER_TYPES,
+  SECOND_OPINION_MODES,
   SENSITIVITY_READ_PERMISSION,
   titleCase,
   type AgentDTO,
   type AiPolicyMode,
   type CompanyAiPolicyDTO,
   type KnowledgeAccessPolicyDTO,
+  type ProviderSelectionMode,
   type ProviderType,
+  type SecondOpinionMode,
 } from "@aibos/shared";
 import { Button, Panel, cn } from "@aibos/ui";
 import { SelectField, TagInput, TextField } from "../wizard/fields";
 
-/** Providers without a live adapter yet (Stage 05): shown, never presented as usable. */
-const NOT_CONNECTED: string[] = ["OPENAI", "GROK"];
+/** Providers without a live adapter yet (Stage 06: only Grok remains unbuilt). */
+const NOT_CONNECTED: string[] = ["GROK"];
+
+const REVIEW_MODE_LABELS: Record<SecondOpinionMode, string> = {
+  off: "Off — no second opinions",
+  manual: "Manual — a permitted person can request one",
+  policy_required: "Policy required — required for configured task types",
+  high_value_only: "High-value only — offered above the cost threshold",
+};
+const PROVIDER_SELECTION_LABELS: Record<ProviderSelectionMode, string> = {
+  fixed: "Fixed — always the preferred provider above",
+  auto: "Auto — whichever of Claude/OpenAI is available",
+};
 import { SensitivityBadge } from "../knowledge/badges";
 import { hasPermission, useMe } from "../shell/SessionContext";
 import { clientApi } from "@/lib/client-api";
@@ -155,6 +170,75 @@ export function AiPolicyPanel({
                 </span>
               ))}
             </div>
+          )}
+        </div>
+
+        <div data-testid="second-opinion-policy">
+          <p className="mb-2 text-[12px] text-fg-faint">Second opinion (independent review)</p>
+          {editing ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <SelectField
+                label="Provider selection"
+                value={p.providerSelection}
+                options={PROVIDER_SELECTION_MODES.map((v) => ({
+                  value: v,
+                  label: PROVIDER_SELECTION_LABELS[v],
+                }))}
+                onChange={(e) =>
+                  setP({ ...p, providerSelection: e.target.value as ProviderSelectionMode })
+                }
+              />
+              <SelectField
+                label="Review mode"
+                value={p.reviewMode}
+                options={SECOND_OPINION_MODES.map((v) => ({
+                  value: v,
+                  label: REVIEW_MODE_LABELS[v],
+                }))}
+                onChange={(e) => setP({ ...p, reviewMode: e.target.value as SecondOpinionMode })}
+              />
+              <SelectField
+                label="Preferred reviewer"
+                value={p.reviewProvider ?? ""}
+                options={[
+                  { value: "", label: "No preference (the other real provider)" },
+                  ...PROVIDER_TYPES.map((v) => ({ value: v, label: PROVIDER_LABELS[v] })),
+                ]}
+                onChange={(e) =>
+                  setP({ ...p, reviewProvider: (e.target.value || null) as ProviderType | null })
+                }
+              />
+              <TextField
+                label="Max reviews per run"
+                hint="Caps how many second opinions a single run may accumulate"
+                type="number"
+                min={1}
+                max={3}
+                value={String(p.maxReviewsPerTask)}
+                onChange={(e) => setP({ ...p, maxReviewsPerTask: Number(e.target.value) })}
+              />
+            </div>
+          ) : (
+            <dl className="grid grid-cols-2 gap-2 text-[12.5px] sm:grid-cols-4">
+              <div>
+                <dt className="text-fg-faint">Provider selection</dt>
+                <dd className="font-medium capitalize">{policy.providerSelection}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Review mode</dt>
+                <dd className="font-medium">{REVIEW_MODE_LABELS[policy.reviewMode]}</dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Preferred reviewer</dt>
+                <dd className="font-medium">
+                  {policy.reviewProvider ? PROVIDER_LABELS[policy.reviewProvider] : "No preference"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-fg-faint">Max reviews per run</dt>
+                <dd className="num font-medium">{policy.maxReviewsPerTask}</dd>
+              </div>
+            </dl>
           )}
         </div>
 

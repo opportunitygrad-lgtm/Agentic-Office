@@ -11,11 +11,13 @@ import {
   getTaskRecord,
   listAgents,
   listConversationMessages,
+  listRunReviews,
   listRuns,
   listTasks,
   previewTaskRun,
   providerStatuses,
   requestRunCancel,
+  requestSecondOpinion,
   runCompanyId,
   setAgentProviderSettings,
   setRunFeedback,
@@ -36,10 +38,12 @@ import {
   agentProviderSettingsSchema,
   chatSendSchema,
   providerSettingsSchema,
+  requestReviewSchema,
   runFeedbackSchema,
   startTaskRunSchema,
   uuidSchema,
   type AgentDTO,
+  type ProviderType,
   type RunStreamMessage,
 } from "@aibos/shared";
 import type { RunBus } from "./run-bus";
@@ -117,6 +121,7 @@ export const executionRoutes =
       const access = principalOf(req).access;
       return {
         canStop: (companyId) => can(access, "agent.run.stop", companyId),
+        canRequestReview: (companyId) => can(access, "ai.review.request", companyId),
         userId: principalOf(req).user.id,
       };
     }
@@ -183,6 +188,7 @@ export const executionRoutes =
     const previewQuery = z.object({
       tier: z.enum(MODEL_TIERS).optional(),
       detail: z.enum(RESPONSE_DETAILS).optional(),
+      provider: z.enum(PROVIDER_TYPES).optional(),
     });
 
     app.get("/tasks/:id/run-preview", async (req) => {
@@ -195,6 +201,7 @@ export const executionRoutes =
         viewerMaxSensitivity: clearance(req, task.companyId),
         requestedTier: q.tier,
         responseDetail: q.detail,
+        requestedProvider: q.provider,
       });
       const canExecute =
         can(principalOf(req).access, "task.execute", task.companyId) &&
@@ -353,6 +360,48 @@ export const executionRoutes =
       };
     });
 
+    /* ---------- second-opinion review (Stage 06) ---------- */
+
+    app.post("/runs/:id/review", async (req, reply) => {
+      const { id } = idParam.parse(req.params);
+      const body = requestReviewSchema.parse(req.body ?? {});
+      const { companyId } = await visibleRun(req, id);
+      if (!companyId || !can(principalOf(req).access, "ai.review.request", companyId))
+        throw await deny(req, "Denied second-opinion review request", {
+          resourceType: "agent_run",
+          resourceId: id,
+          companyId,
+        });
+      const original = await getRunDetail(db, id, {
+        scope: scopeFor(req, "agent.run.view"),
+        viewer: viewer(req),
+      });
+      // Only two real providers exist in this stage, so "the other one" is the
+      // deterministic default reviewer when nobody picked one explicitly.
+      const reviewerProvider: ProviderType =
+        body.reviewerProvider ?? (original.provider === "CLAUDE" ? "OPENAI" : "CLAUDE");
+      const result = await requestSecondOpinion(db, env, id, reviewerProvider, actorFrom(req), {
+        viewerMaxSensitivity: clearance(req, companyId),
+        force: body.force,
+      });
+      if (result.status === "started") await bus.enqueue(result.runId);
+      const run = await getRunDetail(db, result.runId, {
+        scope: scopeFor(req, "agent.run.view"),
+        viewer: viewer(req),
+      });
+      return reply
+        .status(result.status === "started" ? 201 : 200)
+        .send({ data: { status: result.status, run } });
+    });
+
+    app.get("/runs/:id/reviews", async (req) => {
+      const { id } = idParam.parse(req.params);
+      const { companyId } = await visibleRun(req, id);
+      if (!companyId || !can(principalOf(req).access, "ai.review.view", companyId))
+        throw new ForbiddenError();
+      return { data: await listRunReviews(db, id) };
+    });
+
     app.get("/agents/:id/runs", async (req) => {
       const { id } = idParam.parse(req.params);
       await visibleAgent(req, id);
@@ -410,6 +459,7 @@ export const executionRoutes =
       const { runId, existing } = await startChatRun(db, env, id, body.content, actorFrom(req), {
         viewerMaxSensitivity: clearance(req, c.companyId),
         idempotencyKey: body.idempotencyKey,
+        requestedProvider: body.provider,
       });
       if (!existing) await bus.enqueue(runId);
       return reply

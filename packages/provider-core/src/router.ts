@@ -1,11 +1,12 @@
-import type {
-  AgentCapability,
-  BillingMode,
-  EffortLevel,
-  ModelTier,
-  ProviderTransport,
-  ProviderType,
-  RouteDecisionDTO,
+import {
+  TRANSPORT_LABELS,
+  type AgentCapability,
+  type BillingMode,
+  type EffortLevel,
+  type ModelTier,
+  type ProviderTransport,
+  type ProviderType,
+  type RouteDecisionDTO,
 } from "@aibos/shared";
 import { modelLabel, priceModelFor, type ProviderModelConfig } from "./models";
 import { estimateCost } from "./pricing";
@@ -56,6 +57,12 @@ export interface RouteInput {
   } | null;
   /** Run-level override chosen by a person (still bound by company policy). */
   requestedTier?: ModelTier | null;
+  /**
+   * Explicit provider choice for this run (e.g. "run with OpenAI instead"),
+   * still bound by company policy and availability — never a bypass. Ignored
+   * when the task has a hard `providerRequirement`, which always wins.
+   */
+  requestedProvider?: ProviderType | null;
   providers: ProviderAvailability[];
   models: Partial<Record<ProviderType, ProviderModelConfig>>;
   price: (provider: ProviderType, model: string) => ModelPrice | null;
@@ -138,6 +145,15 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
       );
     provider = requirement;
     reasons.push(`Task requires ${requirement}`);
+  } else if (input.requestedProvider) {
+    // 2b. Explicit person choice for this run — still policy-bound, never a bypass.
+    const rp = input.requestedProvider;
+    if (!allowed.has(rp))
+      return blocked(`${rp} is not permitted by company policy for this run`, reasons);
+    if (!usable(rp))
+      return blocked(`PROVIDER_NOT_CONFIGURED: ${why(rp)}`, reasons);
+    provider = rp;
+    reasons.push(`${rp}: explicitly selected for this run`);
   } else {
     const preferred = [
       { p: input.agent.primaryProvider, why: "agent primary provider" },
@@ -209,7 +225,9 @@ export function routeExecution(input: RouteInput): RouteDecisionDTO {
   const est = estimateCost(price, { provider, model, ...input.estimate });
   reasons.push(`${modelLabel(model)} at ${effort} effort`);
   if (billingMode === "subscription")
-    reasons.push("Claude subscription via local Claude Code — included usage, no API billing");
+    reasons.push(
+      `${provider} subscription via ${TRANSPORT_LABELS[transport]} — included usage, no API billing`,
+    );
   return {
     provider,
     model,

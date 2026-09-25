@@ -162,3 +162,107 @@ test("stop run: cancellation reaches the worker and the run ends CANCELLED", asy
     timeout: 60_000,
   });
 });
+
+test("second opinion: Ask OpenAI to review a completed Claude run — both results visible, original preserved", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { taskId } = await newAssignedTask(page, `E2E second opinion ${Date.now()}`);
+  await page.goto(`/tasks/item/${taskId}`);
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByTestId("live-run-panel")).toBeVisible();
+  const result = page.getByTestId("run-result");
+  await expect(result).toBeVisible({ timeout: 60_000 });
+  const originalText = await result.textContent();
+
+  const askButton = page.getByRole("button", { name: "Ask OpenAI to review" });
+  await expect(askButton).toBeVisible();
+  await askButton.click();
+  await expect(page.getByText(/Second-opinion review requested from OpenAI/)).toBeVisible();
+
+  const runs = (await (
+    await page.request.get(`/api/v1/tasks/${taskId}/runs`)
+  ).json()) as { data: { id: string; purpose: string }[] };
+  const primaryId = runs.data.find((r) => r.purpose === "primary")!.id;
+
+  // The review runs as a separate background job; poll the API (not the DOM)
+  // until it lands, then load the page once so the assertions below never
+  // race a client-side fetch that hasn't resolved yet.
+  await expect
+    .poll(
+      async () =>
+        (
+          (await (await page.request.get(`/api/v1/runs/${primaryId}`)).json()) as {
+            data: { review: unknown };
+          }
+        ).data.review !== null,
+      { timeout: 60_000, intervals: [1000] },
+    )
+    .toBe(true);
+  await page.goto(`/tasks/item/${taskId}`);
+  // A completed run's result lives in its history-row dialog, not inline —
+  // open run #1 (the primary) to see it alongside its attached review.
+  await page.getByTestId("run-history").getByRole("button", { name: /^#1/ }).click();
+
+  // Both the original result AND the independent review are visible together —
+  // the review is never merged into or replacing the original.
+  await expect(page.getByTestId("run-result")).toBeVisible();
+  await expect(page.getByTestId("run-result")).toHaveText(originalText ?? "");
+  const review = page.getByTestId("review-card");
+  await expect(review).toContainText("Second opinion");
+  await expect(review).not.toContainText(/wins|winner/i);
+  await expect(page.getByRole("button", { name: "Ask OpenAI to review" })).toHaveCount(0);
+});
+
+test("second opinion: cancelling an in-flight review stops it without touching the original run", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await signIn(page, "ept.manager@aibos.example");
+  await requireMock(page);
+  const { taskId } = await newAssignedTask(page, `E2E review cancel ${Date.now()}`);
+  const created = (await (
+    await page.request.post(`/api/v1/tasks/${taskId}/runs`, { data: {}, headers: ORIGIN })
+  ).json()) as { data: { run: { id: string } } };
+  const primaryId = created.data.run.id;
+  await expect
+    .poll(
+      async () =>
+        (
+          (await (await page.request.get(`/api/v1/runs/${primaryId}`)).json()) as {
+            data: { status: string };
+          }
+        ).data.status,
+      { timeout: 30_000 },
+    )
+    .toBe("completed");
+
+  const review = (await (
+    await page.request.post(`/api/v1/runs/${primaryId}/review`, {
+      data: { reviewerProvider: "OPENAI" },
+      headers: ORIGIN,
+    })
+  ).json()) as { data: { run: { id: string } } };
+  const reviewId = review.data.run.id;
+  await page.request.post(`/api/v1/runs/${reviewId}/cancel`, { data: {}, headers: ORIGIN });
+  await expect
+    .poll(
+      async () =>
+        (
+          (await (await page.request.get(`/api/v1/runs/${reviewId}`)).json()) as {
+            data: { status: string };
+          }
+        ).data.status,
+      { timeout: 30_000 },
+    )
+    .toMatch(/cancelled|cancel_requested/);
+
+  // Cancelling the review never touches the original run's own completed result.
+  const original = (await (await page.request.get(`/api/v1/runs/${primaryId}`)).json()) as {
+    data: { status: string; result: unknown };
+  };
+  expect(original.data.status).toBe("completed");
+  expect(original.data.result).not.toBeNull();
+});

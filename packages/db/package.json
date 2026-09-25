@@ -19,7 +19,8 @@
     "test": "vitest run",
     "auth:bootstrap": "tsx src/auth/bootstrap.ts",
     "claude:live": "tsx src/live/claude-smoke.ts",
-    "claude:subscription-live": "tsx src/live/claude-subscription-smoke.ts"
+    "claude:subscription-live": "tsx src/live/claude-subscription-smoke.ts",
+    "openai:subscription-live": "tsx src/live/openai-subscription-smoke.ts"
   },
   "dependencies": {
     "@aibos/access-core": "workspace:*",

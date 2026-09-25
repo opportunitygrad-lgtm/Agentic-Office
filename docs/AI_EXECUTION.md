@@ -1,4 +1,4 @@
-# AI execution (Stage 05 / 05A)
+# AI execution (Stage 05 / 05A / 06)
 
 How an agent run goes from a button press to a stored, audited result. The
 application is the orchestrator: it compiles instructions, builds context,
@@ -328,13 +328,14 @@ restart the services."_
 
 ## Provider modes and live tests
 
-- `AIBOS_AI_PROVIDER_MODE=mock` uses the deterministic `MockClaudeProvider`
-  (refused when `NODE_ENV=production`). Default is `live`.
+- `AIBOS_AI_PROVIDER_MODE=mock` uses the deterministic `MockClaudeProvider` /
+  `MockCodexProvider` (refused when `NODE_ENV=production`). Default is `live`.
 - `pnpm test` and `pnpm test:e2e` never call a live provider; the E2E
   execution spec skips itself unless the stack runs in mock mode.
 - Automated tests use a **fake Claude Code binary**
-  (`packages/provider-core/test/fixtures/fake-claude.mjs`) — never the real
-  `claude` — so they consume zero subscription usage.
+  (`packages/provider-core/test/fixtures/fake-claude.mjs`) and a **fake Codex
+  binary** (`packages/provider-core/test/fixtures/fake-codex.mjs`) — never the
+  real `claude` / `codex` — so they consume zero subscription usage.
 - `pnpm test:claude-subscription-live` (acceptance, default transport): only
   with `ALLOW_LIVE_AI_TESTS=true` (exit 2 otherwise). Checks binary, login,
   no API-key transport, then one short Sonnet task and one short chat;
@@ -342,16 +343,107 @@ restart the services."_
   API cost. Never uses Opus.
 - `pnpm test:claude-live`: the same for the optional API transport (needs
   `ALLOW_LIVE_AI_TESTS=true` and an API credential; exit 2 / exit 3).
+- `pnpm test:openai-subscription-live` (acceptance, default OpenAI transport):
+  only with `ALLOW_LIVE_AI_TESTS=true` (exit 2 otherwise; exit 4 if Codex is
+  not installed/authenticated). Checks binary, login, no API-key transport,
+  then one short Codex primary task and one short second-opinion review.
+  The review's "original" result is a **stored fixture**, never a live Claude
+  call — this test spends only Codex/ChatGPT subscription usage, never two
+  providers' subscriptions at once.
 
 ## Health states
 
 `NOT_CONFIGURED · AVAILABLE · DEGRADED · RATE_LIMITED · AUTH_ERROR · UNAVAILABLE`
-plus, for Claude Code, `NOT_INSTALLED · LOGIN_REQUIRED · LOGIN_EXPIRED ·
-MISCONFIGURED`, derived from TEST CLAUDE CODE and call outcomes
-(`consecutive_failures`). Setup states (not checked, not installed, login
-required) do not turn system health red. Routing refuses Claude while it is in
-a login/installation/misconfigured state or rate-limited until the reported
-reset, with the Terminal instruction as the reason.
+plus, for CLI-transported providers (Claude Code, Codex), `NOT_INSTALLED ·
+LOGIN_REQUIRED · LOGIN_EXPIRED · MISCONFIGURED`, derived from Test Connection
+and call outcomes (`consecutive_failures`). Setup states (not checked, not
+installed, login required) do not turn system health red. Routing refuses a
+provider while it is in a login/installation/misconfigured state or
+rate-limited until the reported reset, with the Terminal instruction as the
+reason — never a silent switch to the other provider or to API billing.
+
+## OpenAI Codex transport (Stage 06)
+
+**OPENAI** mirrors CLAUDE's subscription-first design: `OPENAI_TRANSPORT`
+selects `codex_cli` (default) — the owner's local, ChatGPT-subscription
+authenticated `codex` binary — or `openai_api`, which is declared but **not
+implemented**: selecting it registers OPENAI as `NotConnectedProvider`, never
+a silent API-key fallback.
+
+### Verified against the installed CLI (`codex-cli 0.157.0`)
+
+- **Health/auth**: `codex doctor --json` — JSON to stdout, warnings to
+  stderr; `overallStatus`/exit code are ignored for auth determination (doctor
+  exits 1 whenever any unrelated check fails, e.g. network reachability). The
+  authoritative signal is `checks["auth.credentials"]`: `status: "fail"` with
+  "no Codex credentials were found" → not logged in; `status: "ok"` with
+  `details["stored auth mode"] === "chatgpt"` → subscription login; `"api_key"`
+  or an API auth env var present → `MISCONFIGURED`, execution blocked.
+- **Non-interactive execution**: `codex exec --json` (prompt via stdin, no
+  positional argument) with `--skip-git-repo-check --ephemeral
+  --ignore-user-config --ignore-rules --strict-config --sandbox read-only -C
+  <isolated dir>`; `-m/--model` omitted for AUTO; `-c
+  model_reasoning_effort=<low|medium|high>` for effort; `--output-schema
+  <file>` for structured output. Never `--dangerously-bypass-approvals-and-sandbox`,
+  never `--full-auto`.
+- **Event stream**: `ThreadEvent`s tagged by `type` —
+  `thread.started`, `turn.started`, `turn.completed { usage }`, `turn.failed {
+  error }`, and `item.*` events where item type `reasoning` is never read,
+  stored or streamed and `agent_message` (cumulative text) is diffed into
+  deltas. No model name and no structured error code appear anywhere in the
+  stream, hence the `doctor`-based auth pre-flight and the regex-based error
+  classifier below.
+- **Cancellation**: SIGINT (Codex's own interrupt signal), not SIGTERM.
+- **No per-turn auth signal**: unlike Claude Code's `system.init.apiKeySource`,
+  Codex's stream never says which auth mode served a given turn, so
+  `CodexCliProvider.stream()` runs the same `doctor --json` check used for
+  Test Connection once before every call — not a model call, no subscription
+  usage — and blocks with `MISCONFIGURED` on an API-key mismatch.
+- **No structured errors**: failures are classified with a best-effort regex
+  over the CLI's message text (`classifyCodexError`); a top-level
+  `{"type":"error",...}` event observed mid-stream can be a non-fatal
+  transient reconnect — only `turn.failed` or a process exit without
+  `turn.completed` is treated as a real failure.
+
+### Isolation and sandboxing
+
+Every Codex run gets its own temporary working directory (never the
+repository, never user documents) and a sanitised child environment: no
+`OPENAI_API_KEY`/`OPENAI_ADMIN_KEY` or any variable that could select an
+alternate API backend, org, project or auth mode; no database/queue/other
+provider credentials. Sandbox is `--sandbox read-only`; approvals are never
+escalated (no `-a`/`--ask-for-approval`, no `--dangerously-bypass-...`), so
+anything the sandbox denies simply fails rather than silently running.
+Concurrency defaults to `CODEX_MAX_CONCURRENCY=1`, enforced by a per-provider
+`Semaphore` inside `CodexCliProvider` — the worker's own concurrency is sized
+to the *sum* of Claude's and Codex's limits so neither starves the other.
+
+## Multi-provider routing & second-opinion review (Stage 06)
+
+Full design in [MULTI_PROVIDER.md](MULTI_PROVIDER.md). In short:
+
+- `routeExecution()` gained `requestedProvider`: an explicit, person-chosen
+  provider for one run, checked after the task's hard `providerRequirement`
+  but still bound by company `allowedProviders` and live availability — a
+  policy-checked choice, never a bypass. A run is re-planned with the same
+  `requestedProvider` it originally resolved to, so re-execution (after a
+  worker restart, say) never silently reroutes to a different provider.
+- A completed **primary** run can get an independent **second opinion** from
+  the other real provider: `POST /v1/runs/:id/review` (permission
+  `ai.review.request`) creates a second run (`run_purpose =
+  'second_opinion'`, `reviewed_run_id` set, `agent_run_reviews` row for fast
+  dedup) that goes through the *same* `executeRun()` executor as any other
+  run — the executor has no special-case code for reviews; the DB-layer
+  `RunStore` picks `providerReviewSchema` instead of
+  `agentExecutionResultSchema` based on the run's own `runPurpose`, and
+  `buildReviewInput()` (in `@aibos/execution-core`) builds a neutral reviewer
+  prompt with no provider identity and no ranking language.
+- A review never claims or drives the reviewed task's own status/claim (it
+  shares `taskId`/`agentId` with the primary run only for budget attribution
+  and run-history grouping).
+- `GET /v1/runs/:id` (`AgentRunDetailDTO.review`) surfaces the latest
+  *completed* review of a primary run; `GET /v1/runs/:id/reviews` lists the
+  full review history for that run.
 
 ## Known limitations
 
@@ -370,3 +462,21 @@ reset, with the Terminal instruction as the reason.
   single worker on the Claude Code machine.
 - `claude auth status` does not always report the plan type; the card then
   shows "Pro subscription" as configured by the owner.
+- Codex's event stream never reports a resolved model name, so the model
+  shown/persisted for an AUTO run is the configured alias (`auto` by default),
+  not a name the provider confirmed.
+- No OpenAI pricing has been seeded (`ai_model_prices` has no OPENAI rows) —
+  the Not-Billed API-equivalent estimate stays `null` for Codex subscription
+  runs until real Anthropic-style sourced pricing is added; this never blocks
+  execution (subscription runs need no price to run).
+- Company `provider_selection: "auto"` resolves deterministically (CLAUDE
+  first, else OPENAI, else the stored default) from live `.available()`
+  checks only — it does not yet weigh enabled/blocked health state, workload,
+  or cost the way the full router does for a fixed provider choice.
+- The Chat surface accepts an explicit `provider` on send (wired end-to-end
+  in the API/DB layers), but the chat UI itself has no provider-selector
+  control yet — a person can only choose a provider from a task's Run
+  preview today.
+- The review-history endpoint (`GET /v1/runs/:id/reviews`) exists and is
+  tested at the DB/API layer, but the web UI only surfaces the single latest
+  completed review inline; a full review-history list view is not built yet.

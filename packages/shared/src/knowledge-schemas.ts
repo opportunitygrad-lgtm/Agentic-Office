@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PROVIDER_TYPES } from "./enums";
+import { PROVIDER_SELECTION_MODES, SECOND_OPINION_MODES } from "./execution";
 import {
   AI_POLICY_MODES,
   BRAND_RULE_CATEGORIES,
@@ -153,6 +154,17 @@ export const aiPolicySchema = z
     premiumAllowed: z.boolean().optional(),
     maxResponseDetail: z.enum(["short", "normal", "detailed", "custom"]).optional(),
     fallbackAllowed: z.boolean().optional(),
+    /**
+     * Stage 06: "fixed" always uses defaultProvider; "auto" lets the router pick
+     * the first available real provider (CLAUDE, then OPENAI) deterministically.
+     */
+    providerSelection: z.enum(PROVIDER_SELECTION_MODES).optional(),
+    /** Second-opinion review policy. Review is never enabled globally by default. */
+    reviewMode: z.enum(SECOND_OPINION_MODES).optional(),
+    reviewProvider: z.enum(PROVIDER_TYPES).nullable().optional(),
+    reviewTaskTypes: z.array(z.string().trim().max(64)).max(20).optional(),
+    highValueThresholdUsd: z.number().min(0).max(100_000).nullable().optional(),
+    maxReviewsPerTask: z.number().int().min(1).max(3).optional(),
   })
   .refine((v) => v.allowedProviders.includes(v.defaultProvider), {
     message: "The default provider must be one of the allowed providers",

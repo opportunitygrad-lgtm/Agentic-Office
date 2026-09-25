@@ -169,12 +169,15 @@ describe("providers", () => {
       .where(eq(schema.aiProviderSettings.provider, "CLAUDE"));
   });
 
-  it("shows OpenAI/Grok as not connected and restricts test/settings to platform roles", async () => {
+  it("shows OpenAI Codex connected (mock subscription) and Grok not connected, and restricts test/settings to platform roles", async () => {
     const list = (await get("ept.manager", "/v1/providers")).json<{ data: ProviderStatusDTO[] }>()
       .data;
+    // Stage 06 default: OPENAI reaches Codex CLI (mock in tests) on the same
+    // subscription-first footing as CLAUDE — never an API key by default.
     expect(list.find((p) => p.provider === "OPENAI")).toMatchObject({
-      connected: false,
-      state: "not_configured",
+      connected: true,
+      transport: "codex_cli",
+      billingMode: "subscription",
     });
     expect(list.find((p) => p.provider === "GROK")).toMatchObject({ connected: false });
     expect((await post("ept.manager", "/v1/providers/CLAUDE/test")).statusCode).toBe(403);

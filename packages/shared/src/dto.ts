@@ -138,6 +138,8 @@ export interface AgentDTO {
   /** Stage 05 provider preferences. */
   preferredModelTier: "standard" | "premium" | "auto";
   defaultEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+  /** Stage 06: who reviews this agent's results when a second opinion is requested. */
+  preferredReviewerProvider: ProviderType | null;
   lastActiveAt: string | null;
   origin: DataOrigin;
   createdAt: string;

@@ -9,6 +9,7 @@ import {
   FileText,
   MessageSquare,
   ScrollText,
+  Sparkles,
   Square,
   ThumbsDown,
   ThumbsUp,
@@ -24,6 +25,8 @@ import {
   type AgentRunDetailDTO,
   type AgentRunDTO,
   type AgentRunStatus,
+  type ProviderReview,
+  type ProviderType,
 } from "@aibos/shared";
 import { Button, MockBadge, StatusPill, cn, type Tone } from "@aibos/ui";
 import { clientApi } from "@/lib/client-api";
@@ -237,6 +240,106 @@ export function RunResultView({ result }: { result: AgentExecutionResult }) {
   );
 }
 
+/**
+ * An independent second-opinion critique — never merged with the original
+ * result and never labelled with a "winner". Sections stay visually distinct
+ * from ORIGINAL RESULT above so nobody mistakes AI analysis for a decision.
+ */
+export function ReviewCard({ review }: { review: ProviderReview }) {
+  const sections: [string, string[]][] = [
+    ["Agreements", review.agreementPoints],
+    ["Disagreements", review.disagreementPoints],
+    ["Possible errors", review.possibleErrors],
+    ["Missing considerations", review.missingConsiderations],
+    ["Unsupported claims", review.unsupportedClaims],
+    ["Risks", review.risks],
+    ["Suggested corrections", review.suggestedCorrections],
+  ];
+  return (
+    <div
+      className="space-y-3 rounded-xl border border-violet-300 bg-violet-50/50 p-3 text-[13px] dark:border-violet-500/40 dark:bg-violet-500/10"
+      data-testid="review-card"
+    >
+      <p className="flex flex-wrap items-center gap-2">
+        <span className="eyebrow flex items-center gap-1 text-violet-700 dark:text-violet-300">
+          <Sparkles className="size-3.5" aria-hidden="true" /> Second opinion
+        </span>
+        <span className="text-[12px] text-fg-muted">Confidence: {review.confidence}</span>
+      </p>
+      <p className="font-medium">{review.overallReviewSummary}</p>
+      {sections.map(([title, list]) =>
+        list.length ? (
+          <section key={title}>
+            <h4 className="eyebrow mb-1">{title}</h4>
+            <ul className="list-disc space-y-0.5 pl-4">
+              {list.map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null,
+      )}
+      <p className="text-[11.5px] text-fg-faint">
+        AI-generated analysis, not company truth — nothing here changes approved knowledge,
+        policy or financial rules automatically.
+      </p>
+    </div>
+  );
+}
+
+/** "Ask the other provider to review" — never automatic, never a self-review. */
+function SecondOpinionAction({
+  run,
+  onChange,
+}: {
+  run: AgentRunDetailDTO;
+  onChange?: (r: AgentRunDetailDTO) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const reviewer: ProviderType | null =
+    run.provider === "CLAUDE" ? "OPENAI" : run.provider === "OPENAI" ? "CLAUDE" : null;
+  if (!reviewer) return null;
+  const reviewerLabel = PROVIDER_LABELS[reviewer];
+  async function request() {
+    setBusy(true);
+    setMsg(null);
+    const r = await clientApi<{ data: { status: string } }>(`/v1/runs/${run.id}/review`, {
+      method: "POST",
+      body: { reviewerProvider: reviewer },
+    });
+    setBusy(false);
+    if (!r.ok) return setMsg(r.message);
+    setMsg(
+      r.data.data.status === "existing"
+        ? "A review from this provider already exists."
+        : `Second-opinion review requested from ${reviewerLabel}.`,
+    );
+    if (onChange) {
+      const fresh = await clientApi<{ data: AgentRunDetailDTO }>(`/v1/runs/${run.id}`);
+      if (fresh.ok) onChange(fresh.data.data);
+    }
+  }
+  return (
+    <div className="space-y-1.5">
+      <Button
+        size="sm"
+        variant="secondary"
+        icon={<Sparkles className="size-3.5" aria-hidden="true" />}
+        disabled={busy}
+        onClick={() => void request()}
+      >
+        Ask {reviewerLabel} to review
+      </Button>
+      {msg && (
+        <p role="status" className="text-[12px] text-fg-muted">
+          {msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Feedback({
   run,
   onChange,
@@ -315,6 +418,20 @@ export function LiveRunPanel({
     ["Company", run.company?.name ?? "—"],
     ["Task", run.task?.title ?? (run.executionType === "chat" ? "Chat reply" : "—")],
     ["Provider", <ProviderBadge key="p" run={run} />],
+    ...(run.purpose === "second_opinion"
+      ? ([
+          [
+            "Purpose",
+            <span
+              key="purpose"
+              className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-800 dark:bg-violet-500/15 dark:text-violet-300"
+              data-testid="run-purpose-badge"
+            >
+              <Sparkles className="size-3 shrink-0" aria-hidden="true" /> SECOND OPINION
+            </span>,
+          ],
+        ] as [string, React.ReactNode][])
+      : []),
     ["Status", <StatusPill key="s" tone={meta.tone} label={meta.label} pulse={meta.pulse} />],
     ["Phase", run.phase],
     ["Started", run.startedAt ? clockTime(run.startedAt) : "—"],
@@ -425,6 +542,15 @@ export function LiveRunPanel({
           )}
           {run.status === "completed" && !run.result && output && (
             <pre className="whitespace-pre-wrap text-[12.5px]">{output}</pre>
+          )}
+          {run.status === "completed" && run.purpose === "primary" && (
+            <div className="mt-3 space-y-3 border-t border-line/70 pt-3">
+              {run.review ? (
+                <ReviewCard review={run.review} />
+              ) : run.viewer.canRequestReview ? (
+                <SecondOpinionAction run={run} onChange={onChange} />
+              ) : null}
+            </div>
           )}
           {(run.status === "failed" || run.status === "needs_review") && (
             <p

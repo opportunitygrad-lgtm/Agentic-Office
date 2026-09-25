@@ -31,6 +31,7 @@ export function AgentProviderPanel({ agent, canEdit }: { agent: AgentDTO; canEdi
     fallbackProvider: agent.fallbackProvider ?? "",
     preferredModelTier: agent.preferredModelTier,
     defaultEffort: agent.defaultEffort ?? "",
+    preferredReviewerProvider: agent.preferredReviewerProvider ?? "",
   });
   const [perf, setPerf] = useState<AgentPerformanceDTO | null>(null);
   const [runs, setRuns] = useState<AgentRunDTO[]>([]);
@@ -59,6 +60,7 @@ export function AgentProviderPanel({ agent, canEdit }: { agent: AgentDTO; canEdi
         fallbackProvider: form.fallbackProvider || null,
         preferredModelTier: form.preferredModelTier,
         defaultEffort: form.defaultEffort || null,
+        preferredReviewerProvider: form.preferredReviewerProvider || null,
       },
     });
     setMsg(r.ok ? "Saved." : r.message);
@@ -133,6 +135,27 @@ export function AgentProviderPanel({ agent, canEdit }: { agent: AgentDTO; canEdi
             {EFFORT_LEVELS.map((e) => (
               <option key={e} value={e}>
                 {e}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-[12px] text-fg-muted">
+          Preferred reviewer (second opinion)
+          <select
+            className={selectCls}
+            disabled={!canEdit}
+            value={form.preferredReviewerProvider}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                preferredReviewerProvider: e.target.value as ProviderType | "",
+              })
+            }
+          >
+            <option value="">No preference</option>
+            {PROVIDER_TYPES.filter((p) => p !== form.primaryProvider).map((p) => (
+              <option key={p} value={p}>
+                {PROVIDER_LABELS[p]}
               </option>
             ))}
           </select>

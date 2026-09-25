@@ -1,10 +1,8 @@
-import {
-  agentExecutionResultSchema,
-  type AgentExecutionResult,
-  type AgentRunStatus,
-  type ProviderErrorCode,
-  type RunEventType,
-  type RunExecutionType,
+import type {
+  AgentRunStatus,
+  ProviderErrorCode,
+  RunEventType,
+  RunExecutionType,
 } from "@aibos/shared";
 import {
   ProviderError,
@@ -34,8 +32,13 @@ export interface RunSnapshot {
 
 export interface SavedResponse {
   result: ProviderResult;
-  structured: AgentExecutionResult | null;
+  /** AgentExecutionResult for task/chat runs, ProviderReview for review runs (see RunStore.validateStructured). */
+  structured: unknown;
 }
+
+export type StructuredValidation =
+  | { success: true; data: unknown }
+  | { success: false };
 
 /**
  * Persistence and side effects for one run. Implemented by @aibos/db;
@@ -65,6 +68,13 @@ export interface RunStore {
     code: ProviderErrorCode,
     message?: string,
   ): Promise<void>;
+  /**
+   * Validates a provider's structured output against the schema that applies
+   * to THIS run (AgentExecutionResult for task/chat, ProviderReview for a
+   * second-opinion review) — the executor itself has no domain knowledge of
+   * which shape applies; the store knows from the run's own persisted purpose.
+   */
+  validateStructured(runId: string, data: unknown): Promise<StructuredValidation>;
   /** Durable save of provider output + usage ledger + cost (idempotent per run). */
   saveResponse(runId: string, result: ProviderResult): Promise<void>;
   loadSavedResponse(runId: string): Promise<ProviderResult | null>;
@@ -231,15 +241,11 @@ async function finish(
   result: ProviderResult,
   store: RunStore,
 ): Promise<ExecuteOutcome> {
-  let structured: AgentExecutionResult | null = null;
+  let structured: unknown = null;
   if (result.structured !== null && result.structured !== undefined) {
-    const parsed = agentExecutionResultSchema.safeParse(result.structured);
+    const parsed = await store.validateStructured(runId, result.structured);
     if (!parsed.success) {
-      await store.fail(
-        runId,
-        "INVALID_OUTPUT",
-        "The provider response did not match the result schema",
-      );
+      await store.fail(runId, "INVALID_OUTPUT", "The provider response did not match the result schema");
       return "failed";
     }
     structured = parsed.data;

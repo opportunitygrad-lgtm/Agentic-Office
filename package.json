@@ -30,7 +30,8 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "auth:bootstrap": "pnpm --filter @aibos/db auth:bootstrap",
     "test:claude-live": "pnpm --filter @aibos/db claude:live",
-    "test:claude-subscription-live": "pnpm --filter @aibos/db claude:subscription-live"
+    "test:claude-subscription-live": "pnpm --filter @aibos/db claude:subscription-live",
+    "test:openai-subscription-live": "pnpm --filter @aibos/db openai:subscription-live"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -77,6 +77,9 @@ import {
   PROVIDER_HEALTH_STATES,
   RESPONSE_DETAILS,
   RUN_EXECUTION_TYPES,
+  PROVIDER_SELECTION_MODES,
+  SECOND_OPINION_MODES,
+  RUN_PURPOSES,
 } from "@aibos/shared";
 
 /* ---------- enums (sourced from @aibos/shared) ---------- */
@@ -138,6 +141,9 @@ export const responseDetail = pgEnum("response_detail", RESPONSE_DETAILS);
 export const agentRunStatus = pgEnum("agent_run_status", AGENT_RUN_STATUSES);
 export const runExecutionType = pgEnum("run_execution_type", RUN_EXECUTION_TYPES);
 export const providerHealthState = pgEnum("provider_health_state", PROVIDER_HEALTH_STATES);
+export const providerSelectionMode = pgEnum("provider_selection_mode", PROVIDER_SELECTION_MODES);
+export const secondOpinionMode = pgEnum("second_opinion_mode", SECOND_OPINION_MODES);
+export const runPurpose = pgEnum("run_purpose", RUN_PURPOSES);
 
 /* ---------- shared column helpers ---------- */
 
@@ -309,6 +315,8 @@ export const agents = pgTable(
     /** Stage 05: default model tier and effort (bounded by company policy). */
     preferredModelTier: modelTier("preferred_model_tier").notNull().default("standard"),
     defaultEffort: effortLevel("default_effort"),
+    /** Stage 06: who reviews this agent's results when a second opinion is requested. */
+    preferredReviewerProvider: providerType("preferred_reviewer_provider"),
     autonomyLevel: agentAutonomy("autonomy").notNull().default("observe"),
     systemInstructions: text("system_instructions"),
     responsibilities: textList("responsibilities"),
@@ -901,6 +909,17 @@ export const companyAiPolicies = pgTable("company_ai_policies", {
   premiumAllowed: boolean("premium_allowed").notNull().default(false),
   maxResponseDetail: responseDetail("max_response_detail").notNull().default("detailed"),
   fallbackAllowed: boolean("fallback_allowed").notNull().default(false),
+  /**
+   * Stage 06: "fixed" always uses companies.default_provider; "auto" lets the
+   * router pick the first available real provider (CLAUDE, then OPENAI).
+   */
+  providerSelection: providerSelectionMode("provider_selection").notNull().default("fixed"),
+  /** Second-opinion review policy — never enabled globally by default. */
+  reviewMode: secondOpinionMode("review_mode").notNull().default("manual"),
+  reviewProvider: providerType("review_provider"),
+  reviewTaskTypes: textList("review_task_types"),
+  highValueThresholdUsd: usd("high_value_threshold_usd"),
+  maxReviewsPerTask: integer("max_reviews_per_task").notNull().default(1),
   updatedByUserId: uuid("updated_by_user_id").references((): AnyPgColumn => users.id, {
     onDelete: "set null",
   }),
@@ -1503,6 +1522,12 @@ export const agentRuns = pgTable(
     conversationId: uuid("conversation_id").references((): AnyPgColumn => conversations.id, {
       onDelete: "set null",
     }),
+    /** Stage 06: PRIMARY (ordinary) vs SECOND_OPINION (independent review of another run). */
+    runPurpose: runPurpose("run_purpose").notNull().default("primary"),
+    /** Set only when run_purpose = 'second_opinion': the run being reviewed. */
+    reviewedRunId: uuid("reviewed_run_id").references((): AnyPgColumn => agentRuns.id, {
+      onDelete: "cascade",
+    }),
     provider: providerType("provider").notNull(),
     model: text("model").notNull(),
     effort: effortLevel("effort"),
@@ -1581,6 +1606,41 @@ export const agentRuns = pgTable(
       "agent_runs_billing_mode",
       sql`${t.billingMode} in ('subscription','api','none') and (${t.billingMode} <> 'subscription' or (${t.actualCost} is null and ${t.reservedCost} = 0))`,
     ),
+    check(
+      "agent_runs_purpose",
+      sql`${t.runPurpose} <> 'second_opinion' or ${t.reviewedRunId} is not null`,
+    ),
+    index("agent_runs_reviewed_idx").on(t.reviewedRunId),
+  ],
+);
+
+/**
+ * Stage 06: links a second-opinion review to the run it critiques, for fast
+ * dedup ("one active/completed review per run + reviewer provider unless a
+ * manual rerun is requested") and future multi-provider comparison. The
+ * review's own content (agreements, disagreements, ...) lives on
+ * reviewer_run_id's own `agent_runs.result`, never duplicated here.
+ */
+export const agentRunReviews = pgTable(
+  "agent_run_reviews",
+  {
+    id: id(),
+    reviewedRunId: uuid("reviewed_run_id")
+      .notNull()
+      .references((): AnyPgColumn => agentRuns.id, { onDelete: "cascade" }),
+    reviewerRunId: uuid("reviewer_run_id")
+      .notNull()
+      .unique()
+      .references((): AnyPgColumn => agentRuns.id, { onDelete: "cascade" }),
+    reviewerProvider: providerType("reviewer_provider").notNull(),
+    requestedByUserId: uuid("requested_by_user_id").references((): AnyPgColumn => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("agent_run_reviews_reviewed_idx").on(t.reviewedRunId, t.createdAt),
+    index("agent_run_reviews_reviewer_provider_idx").on(t.reviewedRunId, t.reviewerProvider),
   ],
 );
 

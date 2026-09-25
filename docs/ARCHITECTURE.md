@@ -363,3 +363,64 @@ done. A cloud deployment would need its own Claude Code login (not provided);
 a cloud → local secure worker bridge is a possible later design, not built.
 The Business OS never implements Claude authentication. See
 [AI_EXECUTION.md](AI_EXECUTION.md).
+
+## OpenAI Codex transport, multi-provider routing & second-opinion review (Stage 06)
+
+**OPENAI** is now a second real logical provider, on the same subscription-first
+footing as CLAUDE. Configuration resolves its transport — `CodexCliTransport`
+(default, `OPENAI_TRANSPORT=codex_cli`) or an `openai_api` transport that is
+declared but **not implemented**: selecting it registers OPENAI as
+not-connected rather than silently using an API key. There is never a runtime
+fallback from a Codex subscription to API billing.
+
+```
+Browser dashboard → API → Queue (BullMQ) → Worker → CodexCliProvider
+  → local `codex` binary (isolated temp workdir, read-only sandbox,
+    sanitised child env, no repo/user-file access) → ChatGPT subscription
+    (owner's own `codex` login)
+```
+
+`CodexCliProvider` implements the same `AIProvider` contract as
+`ClaudeCodeProvider` (see [Provider abstraction](#provider-abstraction)): the
+rest of the system — router, executor, run store, SSE, UI — does not know or
+care that OPENAI's calls go through the Codex CLI instead of Claude Code.
+Differences are isolated inside the provider:
+
+- **No per-turn auth signal.** Codex's `exec --json` stream carries no
+  equivalent of Claude Code's `system.init.apiKeySource`, so `stream()` runs an
+  explicit `codex doctor --json` pre-flight (also used for Test Connection)
+  before every call to catch a ChatGPT-subscription-vs-API-key mismatch
+  (`MISCONFIGURED`, execution blocked) and login state, and re-checks on a
+  `LOGIN_EXPIRED` failure to distinguish "session expired" from "never logged
+  in" (`LOGIN_REQUIRED`).
+- **No structured error codes.** Failures are classified with a best-effort
+  regex over the CLI's message text (`classifyCodexError`) — a deliberate,
+  documented deviation from Claude Code's typed SDK errors, forced by the CLI
+  surface Codex currently exposes.
+- **No reported resolved model.** Codex does not echo a concrete model name in
+  its event stream, so `AUTO` persists the configured alias (`auto` by
+  default) rather than a name the provider never confirmed.
+- **Cancellation is SIGINT-based** (Codex's own graceful-interrupt signal),
+  versus Claude Code's SIGTERM.
+
+**Provider router.** `routeExecution()` gained a `requestedProvider` input: a
+person can explicitly pick a provider for one run (task, chat, or a review),
+still fully bound by company policy (`allowedProviders`) and live
+availability — never a bypass, and a hard task `providerRequirement` still
+outranks it. Normal work still resolves to exactly **one** provider; nothing
+calls both Claude and OpenAI for the same task automatically.
+
+**Second-opinion review.** A permitted person (or, later, policy) can ask one
+provider to independently critique another's *completed* result — never a
+provider reviewing itself, never automatic, never merged into the original.
+The reviewer sees the same isolated Context Pack and the original task/result
+only — never the original provider's hidden reasoning (which is never stored)
+or its identity. The critique (`ProviderReview`: agreements, disagreements,
+possible errors, missing considerations, unsupported claims, risks, suggested
+corrections, confidence) is stored as its own run (`run_purpose =
+'second_opinion'`, linked via `reviewed_run_id` and the `agent_run_reviews`
+table) and displayed alongside — never replacing — the original. Deduplicated
+per (run, reviewer provider): an in-flight review is always reused; a
+completed one is reused unless a manual rerun is explicitly requested. See
+[MULTI_PROVIDER.md](MULTI_PROVIDER.md) for the full design and
+[AI_EXECUTION.md](AI_EXECUTION.md) for the execution-path detail.

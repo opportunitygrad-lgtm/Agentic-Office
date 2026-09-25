@@ -163,7 +163,7 @@ describe("task execution lifecycle", () => {
     expect(usage).toMatchObject({ provider: "CLAUDE", origin: "dev_seed" }); // mock runs never count as real spend
     const detail = await getRunDetail(db, runId, {
       scope: { companyIds: "all", includeGroup: true },
-      viewer: { canStop: () => true, userId: actor.userId! },
+      viewer: { canStop: () => true, canRequestReview: () => true, userId: actor.userId! },
     });
     expect(detail.events.map((e) => e.type)).toEqual(
       expect.arrayContaining([
@@ -680,5 +680,54 @@ describe("Claude Code subscription mode (default transport)", () => {
     });
     expect(std.route).toMatchObject({ model: "sonnet", blockedReason: null });
     await resetHealth();
+  });
+
+  it("honours an explicit person-requested provider for a task run, bound by availability", async () => {
+    await resetHealth();
+    const reg = subRegistry();
+    const e = subEnv(reg);
+    const id = await newTask("Explicit OpenAI request");
+    const p = await preview(db, e, id, {
+      viewerMaxSensitivity: "internal",
+      requestedProvider: "OPENAI",
+    });
+    expect(p.route).toMatchObject({
+      provider: "OPENAI",
+      transport: "codex_cli",
+      billingMode: "subscription",
+    });
+    const started = await startTaskRun(db, e, id, { provider: "OPENAI" }, actor, {
+      viewerMaxSensitivity: "internal",
+    });
+    const runId = (started as { runId: string }).runId;
+    expect(await runRow(runId)).toMatchObject({ provider: "OPENAI", transport: "codex_cli" });
+    expect(
+      await executeRun(runId, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: reg.get("OPENAI"),
+      }),
+    ).toBe("completed");
+  });
+
+  it("honours an explicit person-requested provider in chat", async () => {
+    await resetHealth();
+    const reg = subRegistry();
+    const e = subEnv(reg);
+    const conversationId = await createConversation(
+      db,
+      { agentId: await agentId("EPT Company Manager"), companyId: EPT },
+      actor,
+    );
+    const { runId } = await startChatRun(db, e, conversationId, "Please use OpenAI for this", actor, {
+      viewerMaxSensitivity: "internal",
+      requestedProvider: "OPENAI",
+    });
+    expect(await runRow(runId)).toMatchObject({ provider: "OPENAI", transport: "codex_cli" });
+    expect(
+      await executeRun(runId, {
+        store: createRunStore(db, e, { publish: () => {} }),
+        provider: reg.get("OPENAI"),
+      }),
+    ).toBe("completed");
   });
 });

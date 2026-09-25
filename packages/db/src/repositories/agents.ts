@@ -290,6 +290,7 @@ export async function listAgents(db: Database, filters: AgentFilters = {}): Prom
         roleVersion: versionOf.get(a.id) ?? null,
         preferredModelTier: a.preferredModelTier,
         defaultEffort: a.defaultEffort,
+        preferredReviewerProvider: a.preferredReviewerProvider,
         lastActiveAt: iso(a.lastActiveAt),
         origin: a.origin,
         createdAt: a.createdAt.toISOString(),

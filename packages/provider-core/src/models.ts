@@ -75,12 +75,46 @@ export function priceModelFor(model: string): string {
   return ALIAS_PRICE_MODELS[model] ?? model;
 }
 
+/**
+ * Codex CLI (ChatGPT subscription) defaults. Model availability depends on
+ * the signed-in account and CLI version, so AUTO omits `-m` entirely and lets
+ * Codex/ChatGPT choose; "premium" is only used when explicitly configured to
+ * a distinct, stronger model — never assumed.
+ */
+export const CODEX_MODEL_DEFAULTS: ProviderModelConfig = {
+  standardModel: "auto",
+  premiumModel: "auto",
+  standardEffort: "medium",
+  premiumEffort: "high",
+};
+
+export function codexModelConfig(
+  env: Record<string, string | undefined> = process.env,
+): ProviderModelConfig {
+  return {
+    standardModel: env.CODEX_DEFAULT_MODEL?.trim() || CODEX_MODEL_DEFAULTS.standardModel,
+    premiumModel:
+      env.CODEX_PREMIUM_MODEL?.trim() ||
+      env.CODEX_DEFAULT_MODEL?.trim() ||
+      CODEX_MODEL_DEFAULTS.premiumModel,
+    standardEffort: effortOr(
+      env.CODEX_DEFAULT_REASONING?.trim(),
+      CODEX_MODEL_DEFAULTS.standardEffort,
+    ),
+    premiumEffort: effortOr(
+      env.CODEX_PREMIUM_REASONING?.trim(),
+      CODEX_MODEL_DEFAULTS.premiumEffort,
+    ),
+  };
+}
+
 const LABELS: Record<string, string> = {
   sonnet: "Claude Sonnet",
   opus: "Claude Opus",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-opus-5-5": "Claude Opus 5.5",
   "local-deterministic": "Local deterministic",
+  auto: "Auto (Codex default)",
 };
 
 export function modelLabel(model: string): string {

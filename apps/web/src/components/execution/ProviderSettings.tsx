@@ -10,6 +10,7 @@ import {
   formatUsd,
   type EffortLevel,
   type ProviderStatusDTO,
+  type ProviderType,
 } from "@aibos/shared";
 import { Button, MockBadge, Panel, StatusPill, type Tone } from "@aibos/ui";
 import { clientApi } from "@/lib/client-api";
@@ -38,42 +39,83 @@ const NEEDS_SETUP = new Set<ProviderStatusDTO["state"]>([
   "misconfigured",
 ]);
 
-const ALIAS_LABEL: Record<string, string> = { sonnet: "Sonnet", opus: "Opus" };
+const ALIAS_LABEL: Record<string, string> = { sonnet: "Sonnet", opus: "Opus", auto: "Auto" };
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/**
- * The Business OS never collects Claude credentials: authentication happens in
- * the official Claude Code CLI on the owner's machine.
- */
-function ClaudeCodeSetup({ state }: { state: ProviderStatusDTO["state"] }) {
+/** CLI-transported providers (subscription login, no API key) each get their
+ * own product name, login step and wording — never a shared "Claude" string. */
+interface CliMeta {
+  productName: string;
+  testId: string;
+  authNoun: string; // "Pro subscription" | "ChatGPT subscription"
+  loginCommand: string;
+  testButtonLabel: string;
+  notAuthenticated: string;
+  signInStep: string;
+  neverAsksFor: string;
+  usageLimitLabel: string;
+}
+const CLI_META: Partial<Record<ProviderType, CliMeta>> = {
+  CLAUDE: {
+    productName: "Claude Code",
+    testId: "claude-code",
+    authNoun: "Pro subscription",
+    loginCommand: "claude login",
+    testButtonLabel: "Test Claude Code",
+    notAuthenticated: "Claude Code is not authenticated.",
+    signInStep: "Sign in using your Claude Pro account.",
+    neverAsksFor:
+      "This app never asks for your Claude password, cookies or tokens — sign-in happens only in the official Claude Code app.",
+    usageLimitLabel: "Claude Pro usage limit reached",
+  },
+  OPENAI: {
+    productName: "OpenAI Codex",
+    testId: "codex-cli",
+    authNoun: "ChatGPT subscription",
+    loginCommand: "codex",
+    testButtonLabel: "Test Codex Connection",
+    notAuthenticated: "OpenAI Codex is not authenticated.",
+    signInStep: "Sign in with your ChatGPT account.",
+    neverAsksFor:
+      "This app never asks for your ChatGPT password or session — sign-in happens only in the official Codex app.",
+    usageLimitLabel: "ChatGPT plan usage limit reached",
+  },
+};
+const SUBSCRIPTION_TRANSPORTS = new Set<ProviderStatusDTO["transport"]>([
+  "claude_code_cli",
+  "codex_cli",
+]);
+
+/** The Business OS never collects credentials: authentication happens in the
+ * official CLI (Claude Code / Codex) on the owner's machine. */
+function CliLoginSetup({ meta, state }: { meta: CliMeta; state: ProviderStatusDTO["state"] }) {
   const heading =
     state === "login_expired"
-      ? "Claude login expired."
+      ? `${meta.productName.split(" ")[0]} login expired.`
       : state === "not_installed"
-        ? "Claude Code is not installed on this machine."
+        ? `${meta.productName} is not installed on this machine.`
         : state === "not_configured"
-          ? "Claude Code has not been checked yet."
-          : "Claude Code is not authenticated.";
+          ? `${meta.productName} has not been checked yet.`
+          : meta.notAuthenticated;
   return (
     <div
       className="rounded-xl border border-amber-300 bg-amber-50/60 p-3 dark:border-amber-500/40 dark:bg-amber-500/10"
-      data-testid="claude-code-setup"
+      data-testid={`${meta.testId}-setup`}
     >
       <p className="font-semibold">{heading}</p>
       <ol className="mt-2 list-decimal space-y-1 pl-5">
-        <li>Install Claude Code if necessary.</li>
+        <li>Install {meta.productName} if necessary.</li>
         <li>Open Terminal.</li>
         <li>
           Run{" "}
-          <code className="rounded bg-surface px-1 ring-1 ring-inset ring-line">claude login</code>
+          <code className="rounded bg-surface px-1 ring-1 ring-inset ring-line">
+            {meta.loginCommand}
+          </code>
         </li>
-        <li>Sign in using your Claude Pro account.</li>
-        <li>Return here and click TEST CLAUDE CODE.</li>
+        <li>{meta.signInStep}</li>
+        <li>Return here and click {meta.testButtonLabel.toUpperCase()}.</li>
       </ol>
-      <p className="mt-2 text-[11.5px] text-fg-muted">
-        This app never asks for your Claude password, cookies or tokens — sign-in happens only in
-        the official Claude Code app.
-      </p>
+      <p className="mt-2 text-[11.5px] text-fg-muted">{meta.neverAsksFor}</p>
     </div>
   );
 }
@@ -93,9 +135,12 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
     dailyBudgetUsd: p.dailyBudgetUsd?.toString() ?? "",
   });
   const [msg, setMsg] = useState<string | null>(null);
-  const meta = STATE[p.state];
-  const configurable = p.provider === "CLAUDE";
-  const subscription = p.transport === "claude_code_cli";
+  const state = STATE[p.state];
+  const cliMeta = CLI_META[p.provider];
+  const subscription = !!cliMeta && SUBSCRIPTION_TRANSPORTS.has(p.transport);
+  // Model policy is editable for any real provider (CLAUDE, OPENAI) regardless
+  // of whether its current transport happens to be subscription or API.
+  const configurable = p.provider === "CLAUDE" || p.provider === "OPENAI";
 
   async function test() {
     setMsg("Testing…");
@@ -127,20 +172,22 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
 
   return (
     <Panel
-      title={subscription ? "Claude Code" : p.label}
-      eyebrow={subscription ? "CLAUDE · Pro subscription" : p.provider}
+      title={subscription && cliMeta ? cliMeta.productName : p.label}
+      eyebrow={subscription && cliMeta ? `${p.provider} · ${cliMeta.authNoun}` : p.provider}
       actions={
         <>
           {p.isMock && <MockBadge label="Mock" />}
-          <StatusPill tone={meta.tone} label={meta.label} />
+          <StatusPill tone={state.tone} label={state.label} />
         </>
       }
     >
       <div className="space-y-3 text-[12.5px]" data-testid={`provider-${p.provider}`}>
         {p.detail && <p className="text-fg-muted">{p.detail}</p>}
-        {subscription && NEEDS_SETUP.has(p.state) && <ClaudeCodeSetup state={p.state} />}
-        {subscription ? (
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2" data-testid="claude-code-facts">
+        {subscription && cliMeta && NEEDS_SETUP.has(p.state) && (
+          <CliLoginSetup meta={cliMeta} state={p.state} />
+        )}
+        {subscription && cliMeta ? (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2" data-testid={`${cliMeta.testId}-facts`}>
             <div>
               <dt className="text-fg-faint">Authentication</dt>
               <dd className="font-medium">
@@ -148,8 +195,8 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
                   ? "Not signed in"
                   : p.cli?.subscriptionType
                     ? `${cap(p.cli.subscriptionType)} subscription`
-                    : "Pro subscription"}{" "}
-                <span className="text-fg-faint">(claude login)</span>
+                    : cliMeta.authNoun}{" "}
+                <span className="text-fg-faint">({cliMeta.loginCommand})</span>
               </dd>
             </div>
             <div>
@@ -158,7 +205,7 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
             </div>
             <div>
               <dt className="text-fg-faint">Status</dt>
-              <dd className="font-medium">{meta.label}</dd>
+              <dd className="font-medium">{state.label}</dd>
             </div>
             <div>
               <dt className="text-fg-faint">Model</dt>
@@ -196,7 +243,7 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
               <dd className="font-medium">
                 {p.rateLimit
                   ? p.rateLimit.status === "rejected"
-                    ? `Claude Pro usage limit reached${p.rateLimit.resetsAt ? ` · resets ${formatDateTime(p.rateLimit.resetsAt)}` : ""}`
+                    ? `${cliMeta.usageLimitLabel}${p.rateLimit.resetsAt ? ` · resets ${formatDateTime(p.rateLimit.resetsAt)}` : ""}`
                     : p.rateLimit.status === "allowed_warning"
                       ? "Approaching the usage limit"
                       : "Within usage limits"
@@ -204,7 +251,7 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
               </dd>
             </div>
             <div>
-              <dt className="text-fg-faint">Claude Code</dt>
+              <dt className="text-fg-faint">{cliMeta.productName}</dt>
               <dd className="font-medium">
                 {p.cli?.version
                   ? /^\d/.test(p.cli.version)
@@ -285,10 +332,10 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
             <legend className="px-1 text-[12px] font-medium">Model policy</legend>
             {(["standardModel", "premiumModel"] as const).map((k) => (
               <label key={k} className="text-[12px] text-fg-muted">
-                {subscription
+                {subscription && cliMeta
                   ? k === "standardModel"
-                    ? "Standard model (Claude Code alias)"
-                    : "Premium model (Claude Code alias)"
+                    ? `Standard model (${cliMeta.productName} alias)`
+                    : `Premium model (${cliMeta.productName} alias)`
                   : k === "standardModel"
                     ? "Standard model id"
                     : "Premium model id"}
@@ -341,7 +388,7 @@ function ProviderCard({ p }: { p: ProviderStatusDTO }) {
             onClick={() => void test()}
             disabled={!subscription && !p.connected}
           >
-            {subscription ? "Test Claude Code" : "Test Claude connection"}
+            {subscription && cliMeta ? cliMeta.testButtonLabel : `Test ${p.label} connection`}
           </Button>
         )}
         {msg && (

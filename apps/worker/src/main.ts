@@ -9,8 +9,10 @@ import {
 } from "@aibos/execution-core";
 import {
   claudeCodeConfigFromEnv,
+  codexConfigFromEnv,
   createProviderRegistry,
   killAllClaudeCodeChildren,
+  killAllCodexChildren,
 } from "@aibos/provider-core";
 import { QUEUE_NAMES } from "@aibos/shared";
 import { processAgentTask, writeHeartbeat, type AgentTaskJobData } from "./processors";
@@ -43,8 +45,9 @@ const systemWorker = new Worker(
 );
 
 // Agent execution. Claude runs through the owner's local Claude Code
-// subscription by default (CLAUDE_TRANSPORT); this worker must run on the
-// machine/user account where `claude login` was done.
+// subscription by default (CLAUDE_TRANSPORT); OpenAI through the owner's
+// local Codex CLI subscription by default (OPENAI_TRANSPORT) — this worker
+// must run on the machine/user account where `claude login` / `codex` was done.
 const dbHandle = createDb(requireEnv("DATABASE_URL"));
 const registry = createProviderRegistry();
 const env = {
@@ -54,12 +57,21 @@ const env = {
   subscriptionLimits: subscriptionLimitsFromEnv(),
 };
 const claude = registry.get("CLAUDE");
-// Subscription capacity is finite: run at most CLAUDE_CODE_MAX_CONCURRENCY (default 1)
-// agent runs at once; the rest wait QUEUED in BullMQ.
-const runConcurrency =
+const openai = registry.get("OPENAI");
+// Each CLI-transported provider enforces its own concurrency ceiling
+// internally (a per-provider Semaphore around the actual subprocess), so the
+// shared BullMQ worker's concurrency only needs to be large enough that
+// neither provider starves the other — the sum of both ceilings, never a
+// single shared number that would serialise Codex behind Claude Code.
+const claudeMaxConcurrency =
   claude.transport === "claude_code_cli"
     ? claudeCodeConfigFromEnv(process.env, registry.models.CLAUDE!).maxConcurrency
     : concurrency;
+const codexMaxConcurrency =
+  openai.transport === "codex_cli"
+    ? codexConfigFromEnv(process.env, registry.models.OPENAI!).maxConcurrency
+    : 0;
+const runConcurrency = Math.max(1, claudeMaxConcurrency + codexMaxConcurrency);
 const runQueue = new Queue<AgentRunJobData>(QUEUE_NAMES.agentRuns, { connection: connection() });
 const processRun = createRunProcessor({
   db: dbHandle.db,
@@ -80,6 +92,8 @@ logger.info(
     mode: registry.mode,
     claudeTransport: claude.transport,
     claudeBilling: claude.billingMode,
+    openaiTransport: openai.transport,
+    openaiBilling: openai.billingMode,
     runConcurrency,
   },
   "AI providers",
@@ -108,9 +122,11 @@ async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   logger.info({ signal }, "shutting down worker");
-  // Never leave a Claude Code child running on its own.
-  const killed = killAllClaudeCodeChildren();
-  if (killed) logger.warn({ killed }, "terminated running Claude Code processes");
+  // Never leave a Claude Code or Codex CLI child running on its own.
+  const killedClaude = killAllClaudeCodeChildren();
+  if (killedClaude) logger.warn({ killed: killedClaude }, "terminated running Claude Code processes");
+  const killedCodex = killAllCodexChildren();
+  if (killedCodex) logger.warn({ killed: killedCodex }, "terminated running Codex CLI processes");
   await Promise.allSettled([
     systemWorker.close(),
     agentWorker.close(),

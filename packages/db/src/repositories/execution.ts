@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "dri
 import { evaluateBudget, type BudgetLimit } from "@aibos/delegation-core";
 import {
   buildChatInput,
+  buildReviewInput,
   buildTaskInput,
   DEFAULT_SUBSCRIPTION_LIMITS,
   maxOutputTokensFor,
@@ -10,6 +11,8 @@ import {
   type SubscriptionLimits,
 } from "@aibos/execution-core";
 import {
+  estimateCost,
+  modelLabel,
   priceModelFor,
   routeExecution,
   type ModelPrice,
@@ -18,21 +21,25 @@ import {
 } from "@aibos/provider-core";
 import {
   ACTIVE_RUN_STATUSES,
+  PROVIDER_LABELS,
   PROVIDER_TYPES,
   SENSITIVITY_LEVELS,
   sensitivityRank,
   startTaskRunSchema,
   type AgentCapability,
   type AgentContextPack,
+  type AgentExecutionResult,
   type BillingMode,
   type BudgetCheckDTO,
   type BudgetDecision,
   type CompiledAgentInstructionPack,
   type ModelTier,
+  type ProviderSelectionMode,
   type ProviderType,
   type ResponseDetail,
   type RouteDecisionDTO,
   type RunPreviewDTO,
+  type SecondOpinionMode,
   type SensitivityLevel,
   type StartTaskRunInput,
 } from "@aibos/shared";
@@ -40,6 +47,7 @@ import type { Database } from "../client";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors";
 import {
   agentCompanyAssignments,
+  agentRunReviews,
   agentRuns,
   agents,
   aiModelPrices,
@@ -52,6 +60,7 @@ import {
   conversations,
   tasks,
   type Agent,
+  type AgentRun,
   type Company,
   type Task,
 } from "../schema";
@@ -133,14 +142,29 @@ export async function effectiveModels(
   return out;
 }
 
-const UNAVAILABLE_REASON: Record<string, string> = {
-  not_installed: "Claude Code is not installed on this machine",
-  login_required: "Claude Code login required — open Terminal and run: claude login",
-  login_expired: "Claude login expired — run in Terminal: claude login",
-  misconfigured: "Claude Code is misconfigured — see Settings → AI Providers",
-  rate_limited: "Claude Pro usage limit reached — no API fallback is used",
-  auth_error: "Provider authentication failed",
-  unavailable: "Provider unavailable",
+/** CLI-transported providers have no credential the OS can inspect: health comes from
+ * explicit Test Connection (local CLI checks) and real run outcomes, not a stored key. */
+const CLI_TRANSPORTS = new Set(["claude_code_cli", "codex_cli"]);
+
+const UNAVAILABLE_REASON: Partial<Record<ProviderType, Record<string, string>>> = {
+  CLAUDE: {
+    not_installed: "Claude Code is not installed on this machine",
+    login_required: "Claude Code login required — open Terminal and run: claude login",
+    login_expired: "Claude login expired — run in Terminal: claude login",
+    misconfigured: "Claude Code is misconfigured — see Settings → AI Providers",
+    rate_limited: "Claude Pro usage limit reached — no API fallback is used",
+    auth_error: "Provider authentication failed",
+    unavailable: "Provider unavailable",
+  },
+  OPENAI: {
+    not_installed: "OpenAI Codex CLI is not installed on this machine",
+    login_required: "OpenAI Codex login required — open Terminal and run: codex",
+    login_expired: "ChatGPT login expired — open Terminal and run: codex",
+    misconfigured: "OpenAI Codex is misconfigured — see Settings → AI Providers",
+    rate_limited: "ChatGPT plan usage limit reached — no API fallback is used",
+    auth_error: "Provider authentication failed",
+    unavailable: "Provider unavailable",
+  },
 };
 
 async function providerAvailability(db: Db, registry: ProviderRegistry) {
@@ -164,13 +188,13 @@ async function providerAvailability(db: Db, registry: ProviderRegistry) {
       ].includes(state) ||
         limited);
     const reason = !p.available()
-      ? p.transport === "claude_code_cli"
-        ? "Claude Code is not ready — see Settings → AI Providers"
+      ? CLI_TRANSPORTS.has(p.transport)
+        ? `${PROVIDER_LABELS[provider]} is not ready — see Settings → AI Providers`
         : `${provider} is not connected`
       : !(s?.enabled ?? true)
         ? `${provider} is disabled in Settings → AI Providers`
         : blockedState
-          ? (UNAVAILABLE_REASON[state!] ?? `${provider} is unavailable`)
+          ? (UNAVAILABLE_REASON[provider]?.[state!] ?? `${provider} is unavailable`)
           : null;
     return {
       provider,
@@ -186,7 +210,17 @@ async function providerAvailability(db: Db, registry: ProviderRegistry) {
 
 /* ---------- company AI policy ---------- */
 
-export async function companyProviderPolicy(db: Db, companyId: string) {
+/**
+ * `registry` is optional so callers that only need static policy (e.g. the
+ * Settings UI) can omit it; AUTO provider selection resolves to CLAUDE unless
+ * unavailable, then OPENAI, then falls back to the stored default — a
+ * deterministic tie-break, never an AI or workload-based choice.
+ */
+export async function companyProviderPolicy(
+  db: Db,
+  companyId: string,
+  registry?: ProviderRegistry,
+) {
   const [p] = await db
     .select()
     .from(companyAiPolicies)
@@ -195,6 +229,16 @@ export async function companyProviderPolicy(db: Db, companyId: string) {
     .select({ defaultProvider: companies.defaultProvider })
     .from(companies)
     .where(eq(companies.id, companyId));
+  const providerSelection = (p?.providerSelection ?? "fixed") as ProviderSelectionMode;
+  const storedDefault = (c?.defaultProvider ?? "CLAUDE") as ProviderType | null;
+  let preferredProvider = storedDefault;
+  if (providerSelection === "auto" && registry) {
+    preferredProvider = registry.get("CLAUDE").available()
+      ? "CLAUDE"
+      : registry.get("OPENAI").available()
+        ? "OPENAI"
+        : storedDefault;
+  }
   return {
     allowedProviders: (p?.allowedProviders ?? [
       "CLAUDE",
@@ -202,11 +246,17 @@ export async function companyProviderPolicy(db: Db, companyId: string) {
       "GROK",
       "LOCAL",
     ]) as ProviderType[],
-    preferredProvider: (c?.defaultProvider ?? "CLAUDE") as ProviderType | null,
+    preferredProvider,
+    providerSelection,
     defaultModelTier: (p?.defaultModelTier ?? "standard") as ModelTier,
     premiumAllowed: p?.premiumAllowed ?? false,
     fallbackAllowed: p?.fallbackAllowed ?? false,
     maxResponseDetail: (p?.maxResponseDetail ?? "detailed") as ResponseDetail,
+    reviewMode: (p?.reviewMode ?? "manual") as SecondOpinionMode,
+    reviewProvider: (p?.reviewProvider ?? null) as ProviderType | null,
+    reviewTaskTypes: p?.reviewTaskTypes ?? [],
+    highValueThresholdUsd: p?.highValueThresholdUsd ?? null,
+    maxReviewsPerTask: p?.maxReviewsPerTask ?? 1,
   };
 }
 
@@ -238,7 +288,7 @@ const asSensitivity = (v: string): SensitivityLevel =>
 /* ---------- planning ---------- */
 
 export interface RunPlan {
-  kind: "task" | "chat";
+  kind: "task" | "chat" | "review";
   company: Company;
   agent: Agent;
   task: Task | null;
@@ -258,6 +308,8 @@ export interface RunPlan {
     historyDropped?: number;
   };
   problems: string[];
+  /** Set only for kind "review": the primary run this run independently critiques. */
+  reviewedRunId?: string | null;
 }
 
 async function agentServes(db: Db, agent: Agent, companyId: string): Promise<boolean> {
@@ -282,11 +334,12 @@ async function routeFor(
     agent: Agent;
     task: Task | null;
     requestedTier?: ModelTier | null;
+    requestedProvider?: ProviderType | null;
     approxInputTokens: number;
     maxOutputTokens: number;
   },
 ): Promise<RouteDecisionDTO> {
-  const policy = await companyProviderPolicy(db, args.company.id);
+  const policy = await companyProviderPolicy(db, args.company.id, env.registry);
   const [providers, models] = await Promise.all([
     providerAvailability(db, env.registry),
     effectiveModels(db, env.registry),
@@ -317,6 +370,7 @@ async function routeFor(
         }
       : null,
     requestedTier: args.requestedTier ?? null,
+    requestedProvider: args.requestedProvider ?? null,
     providers,
     models,
     price: (p, m) => prices.get(`${p}:${m}`) ?? null,
@@ -351,6 +405,7 @@ export async function planTaskRun(
     viewerMaxSensitivity: SensitivityLevel;
     requestedTier?: ModelTier | null;
     responseDetail?: ResponseDetail | null;
+    requestedProvider?: ProviderType | null;
   },
 ): Promise<RunPlan> {
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId));
@@ -371,7 +426,7 @@ export async function planTaskRun(
   if (BLOCKING_AGENT_STATES.includes(agent.status)) problems.push(`Agent is ${agent.status}`);
   if (agent.autonomyLevel === "disabled") problems.push("Agent autonomy is disabled");
 
-  const policy = await companyProviderPolicy(db, company.id);
+  const policy = await companyProviderPolicy(db, company.id, env.registry);
   const { detail, maxOutputTokens } = maxOutputTokensFor(
     opts.responseDetail ?? task.responseDetail,
     policy.maxResponseDetail,
@@ -396,6 +451,7 @@ export async function planTaskRun(
     agent,
     task,
     requestedTier: opts.requestedTier,
+    requestedProvider: opts.requestedProvider,
     approxInputTokens: input.approxInputTokens,
     maxOutputTokens,
   });
@@ -421,7 +477,11 @@ export async function planChatRun(
   env: ExecutionEnv,
   conversationId: string,
   message: string,
-  opts: { viewerMaxSensitivity: SensitivityLevel; excludeMessageId?: string | null },
+  opts: {
+    viewerMaxSensitivity: SensitivityLevel;
+    excludeMessageId?: string | null;
+    requestedProvider?: ProviderType | null;
+  },
 ): Promise<RunPlan> {
   const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!c) throw new NotFoundError("Conversation", conversationId);
@@ -440,7 +500,7 @@ export async function planChatRun(
   const problems: string[] = [];
   if (BLOCKING_AGENT_STATES.includes(agent.status)) problems.push(`Agent is ${agent.status}`);
   if (agent.autonomyLevel === "disabled") problems.push("Agent autonomy is disabled");
-  const policy = await companyProviderPolicy(db, company.id);
+  const policy = await companyProviderPolicy(db, company.id, env.registry);
   const { detail, maxOutputTokens } = maxOutputTokensFor("normal", policy.maxResponseDetail);
   const instructions = await compileInstructionsFor(db, {
     agentId: agent.id,
@@ -471,6 +531,7 @@ export async function planChatRun(
     company,
     agent,
     task: null,
+    requestedProvider: opts.requestedProvider,
     approxInputTokens: input.approxInputTokens,
     maxOutputTokens,
   });
@@ -491,6 +552,150 @@ export async function planChatRun(
       historyDropped: dropped,
     },
     problems,
+  };
+}
+
+/* ---------- second-opinion review planning ---------- */
+
+interface ReviewCandidate {
+  reviewedRun: AgentRun;
+  task: Task;
+  company: Company;
+  agent: Agent;
+}
+
+/** Loads and validates the run a second opinion would review — never the reverse. */
+async function loadReviewCandidate(db: Db, reviewedRunId: string): Promise<ReviewCandidate> {
+  const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, reviewedRunId));
+  if (!run) throw new NotFoundError("Run", reviewedRunId);
+  if (run.runPurpose !== "primary")
+    throw new ConflictError("Only a primary run can be reviewed — a review is not itself reviewable");
+  if (run.status !== "completed") throw new ConflictError("Only a completed run can be reviewed");
+  if (run.executionType !== "task")
+    throw new ConflictError("A second opinion is available for task runs only");
+  if (!run.companyId || !run.agentId || !run.taskId)
+    throw new ConflictError("This run cannot be reviewed (missing company, agent or task)");
+  const [company] = await db.select().from(companies).where(eq(companies.id, run.companyId));
+  const [agent] = await db.select().from(agents).where(eq(agents.id, run.agentId));
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, run.taskId));
+  if (!company || !agent || !task) throw new NotFoundError("Run", reviewedRunId);
+  return { reviewedRun: run, task, company, agent };
+}
+
+/**
+ * Builds an independent second-opinion review run. Bypasses routeExecution's
+ * provider-selection entirely: the reviewer provider is explicitly chosen by
+ * the caller (never automatic), and the route is built directly from
+ * effectiveModels()/currentPrice() the same way routeExecution would, minus
+ * the candidate-selection steps that do not apply to an explicit choice.
+ * Re-verifies isolation independently of the original run's plan.
+ */
+export async function planReviewRun(
+  db: Db,
+  env: ExecutionEnv,
+  reviewedRunId: string,
+  reviewerProvider: ProviderType,
+  opts: { viewerMaxSensitivity: SensitivityLevel },
+): Promise<RunPlan> {
+  const { reviewedRun, task, company, agent } = await loadReviewCandidate(db, reviewedRunId);
+  if (reviewerProvider === reviewedRun.provider)
+    throw new ConflictError(
+      "A provider cannot review its own result — choose a different reviewer",
+    );
+  const result = reviewedRun.result as AgentExecutionResult | null;
+  if (!result) throw new ConflictError("The original run has no structured result to review");
+  if (!(await agentServes(db, agent, company.id)))
+    throw new ForbiddenError("The assigned agent does not serve this company");
+
+  // Never let a review see more than the original run was allowed to see.
+  const originalViewer = asSensitivity(reviewedRun.viewerMaxSensitivity);
+  const viewerMaxSensitivity =
+    sensitivityRank(originalViewer) <= sensitivityRank(opts.viewerMaxSensitivity)
+      ? originalViewer
+      : opts.viewerMaxSensitivity;
+
+  const policy = await companyProviderPolicy(db, company.id, env.registry);
+  if (!policy.allowedProviders.includes(reviewerProvider))
+    throw new ConflictError(`${reviewerProvider} is not permitted by company policy`);
+
+  const instructions = await compileInstructionsFor(db, {
+    agentId: agent.id,
+    companyId: company.id,
+    taskId: task.id,
+  });
+  const raw = await buildContextPack(db, {
+    companyId: company.id,
+    agentId: agent.id,
+    taskId: task.id,
+  });
+  const { pack: context, removed } = capContextForViewer(raw, viewerMaxSensitivity);
+  const input = buildReviewInput(
+    context,
+    { title: task.title, description: task.description },
+    { summary: result.summary, response: result.response },
+  );
+
+  const { detail, maxOutputTokens } = maxOutputTokensFor(
+    reviewedRun.responseDetail,
+    policy.maxResponseDetail,
+  );
+  const [providers, models] = await Promise.all([
+    providerAvailability(db, env.registry),
+    effectiveModels(db, env.registry),
+  ]);
+  const info = providers.find((p) => p.provider === reviewerProvider);
+  if (!info || !info.available)
+    throw new ConflictError(info?.unavailableReason ?? `${reviewerProvider} is not available`);
+  const m = models[reviewerProvider];
+  if (!m) throw new ConflictError(`No model configuration for ${reviewerProvider}`);
+  const model = m.standardModel;
+  const effort = m.standardEffort;
+  const price = await currentPrice(
+    db,
+    reviewerProvider,
+    info.billingMode === "subscription" ? priceModelFor(model) : model,
+  );
+  if (!price && info.billingMode === "api")
+    throw new ConflictError(`No price configured for ${model} — cost cannot be controlled`);
+  const est = estimateCost(price, {
+    provider: reviewerProvider,
+    model,
+    inputTokens: input.approxInputTokens,
+    maxOutputTokens,
+  });
+  const route: RouteDecisionDTO = {
+    provider: reviewerProvider,
+    model,
+    modelLabel: modelLabel(model),
+    effort,
+    tier: "standard",
+    reasons: [`${reviewerProvider}: explicitly selected as independent reviewer`],
+    estimatedInputTokens: est.inputTokens,
+    estimatedOutputTokens: est.outputTokens,
+    estimatedCostUsd: info.billingMode === "subscription" ? 0 : est.costUsd,
+    fallbackProvider: null,
+    approvalRequired: false,
+    blockedReason: null,
+    isMock: info.isMock,
+    transport: info.transport,
+    billingMode: info.billingMode,
+    apiEquivalentUsd: info.billingMode === "subscription" && price ? est.costUsd : null,
+  };
+  return {
+    kind: "review",
+    company,
+    agent,
+    task,
+    conversationId: null,
+    instructions,
+    context,
+    input,
+    route,
+    detail,
+    maxOutputTokens,
+    contextSummary: summarise(context, removed, input.approxInputTokens),
+    problems: [],
+    reviewedRunId,
   };
 }
 
@@ -781,6 +986,7 @@ export async function previewTaskRun(
     viewerMaxSensitivity: SensitivityLevel;
     requestedTier?: ModelTier | null;
     responseDetail?: ResponseDetail | null;
+    requestedProvider?: ProviderType | null;
   },
 ): Promise<RunPreviewDTO> {
   const plan = await planTaskRun(db, env, taskId, opts).catch((e: unknown) => e as Error);
@@ -930,8 +1136,10 @@ async function insertRun(
       executionType: plan.kind,
       status: "queued",
       companyId: plan.company.id,
-      taskId: plan.task && plan.kind === "task" ? plan.task.id : null,
+      taskId: plan.task && plan.kind !== "chat" ? plan.task.id : null,
       agentId: plan.agent.id,
+      runPurpose: plan.reviewedRunId ? "second_opinion" : "primary",
+      reviewedRunId: plan.reviewedRunId ?? null,
       conversationId: plan.conversationId,
       provider: route.provider!,
       model: route.model!,
@@ -986,7 +1194,7 @@ async function insertRun(
   await recordAuditEvent(tx, {
     ...audit,
     action: "agent_run.created",
-    description: `${plan.kind === "chat" ? "Chat" : "Task"} run created for ${plan.agent.name} (${route.modelLabel}, est $${route.estimatedCostUsd})`,
+    description: `${plan.kind === "chat" ? "Chat" : plan.kind === "review" ? "Second-opinion review" : "Task"} run created for ${plan.agent.name} (${route.modelLabel}, est $${route.estimatedCostUsd})`,
     metadata: {
       provider: route.provider,
       model: route.model,
@@ -1036,6 +1244,7 @@ export async function startTaskRun(
     viewerMaxSensitivity: opts.viewerMaxSensitivity,
     requestedTier: data.modelTier,
     responseDetail: data.responseDetail,
+    requestedProvider: data.provider,
   });
   if (plan.problems.length) throw new ConflictError(plan.problems.join("; "));
   if (plan.route.blockedReason || !plan.route.provider)
@@ -1173,7 +1382,11 @@ export async function startChatRun(
   conversationId: string,
   content: string,
   actor: Actor,
-  opts: { viewerMaxSensitivity: SensitivityLevel; idempotencyKey?: string | null },
+  opts: {
+    viewerMaxSensitivity: SensitivityLevel;
+    idempotencyKey?: string | null;
+    requestedProvider?: ProviderType | null;
+  },
 ): Promise<{ runId: string; existing: boolean }> {
   if (opts.idempotencyKey) {
     const [existing] = await db
@@ -1186,6 +1399,7 @@ export async function startChatRun(
     throw new ConflictError("The agent is still answering the previous message");
   const plan = await planChatRun(db, env, conversationId, content, {
     viewerMaxSensitivity: opts.viewerMaxSensitivity,
+    requestedProvider: opts.requestedProvider,
   });
   if (plan.problems.length) throw new ConflictError(plan.problems.join("; "));
   if (plan.route.blockedReason || !plan.route.provider)
@@ -1256,16 +1470,132 @@ export async function startChatRun(
     });
 }
 
+/* ---------- second-opinion review requests ---------- */
+
+export type RequestReviewResult = { status: "started" | "existing"; runId: string };
+
+/** Existing review rows for a run, most recent first — for dedup and the review-history UI. */
+export async function listRunReviews(db: Db, reviewedRunId: string) {
+  return db
+    .select({
+      id: agentRunReviews.id,
+      reviewerRunId: agentRunReviews.reviewerRunId,
+      reviewerProvider: agentRunReviews.reviewerProvider,
+      requestedByUserId: agentRunReviews.requestedByUserId,
+      createdAt: agentRunReviews.createdAt,
+      reviewerRunStatus: agentRuns.status,
+      review: agentRuns.result,
+    })
+    .from(agentRunReviews)
+    .innerJoin(agentRuns, eq(agentRuns.id, agentRunReviews.reviewerRunId))
+    .where(eq(agentRunReviews.reviewedRunId, reviewedRunId))
+    .orderBy(desc(agentRunReviews.createdAt));
+}
+
+/**
+ * Requests an independent second opinion. Deduplicated: an in-flight review
+ * for the same (run, reviewer provider) is always reused; a completed one is
+ * reused unless `force`, so a manual rerun still creates a fresh review while
+ * accidental double-clicks never burn subscription usage twice. Never
+ * auto-triggers a further review (no recursive review chains).
+ */
+export async function requestSecondOpinion(
+  db: Database,
+  env: ExecutionEnv,
+  reviewedRunId: string,
+  reviewerProvider: ProviderType,
+  actor: Actor,
+  opts: { viewerMaxSensitivity: SensitivityLevel; force?: boolean },
+): Promise<RequestReviewResult> {
+  const plan = await planReviewRun(db, env, reviewedRunId, reviewerProvider, opts);
+  if (plan.route.blockedReason || !plan.route.provider)
+    throw new ConflictError(plan.route.blockedReason ?? "No provider available");
+
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`ai-review:${reviewedRunId}:${reviewerProvider}`}))`,
+    );
+    const existing = await listRunReviews(tx, reviewedRunId);
+    const priorForProvider = existing.find((r) => r.reviewerProvider === reviewerProvider);
+    if (
+      priorForProvider &&
+      (ACTIVE_RUN_STATUSES.includes(priorForProvider.reviewerRunStatus) ||
+        (priorForProvider.reviewerRunStatus === "completed" && !opts.force))
+    )
+      return { status: "existing", runId: priorForProvider.reviewerRunId };
+
+    const policy = await companyProviderPolicy(tx, plan.company.id, env.registry);
+    if (existing.length >= policy.maxReviewsPerTask)
+      throw new ConflictError(
+        `This run already has ${existing.length} review(s) — company policy allows ${policy.maxReviewsPerTask}`,
+      );
+
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`ai-budget:${plan.company.id}`}))`,
+    );
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('ai-budget:global'))`);
+    const budget = await budgetPreflight(tx, {
+      company: plan.company,
+      agent: plan.agent,
+      task: plan.task,
+      provider: reviewerProvider,
+      estimateUsd: plan.route.estimatedCostUsd,
+      billingMode: plan.route.billingMode,
+      inputTokens: plan.route.estimatedInputTokens,
+      subscription: env.subscriptionLimits,
+    });
+    if (budget.decision !== "allowed")
+      throw new ConflictError(`Review blocked by budget: ${budget.reasons.join("; ")}`);
+
+    const runId = await insertRun(tx, plan, env, actor, {
+      viewerMaxSensitivity: opts.viewerMaxSensitivity,
+      maxRetries: Math.min(plan.agent.maxRetries, 1),
+    });
+    await tx.insert(agentRunReviews).values({
+      reviewedRunId,
+      reviewerRunId: runId,
+      reviewerProvider,
+      requestedByUserId: actor.userId ?? null,
+    });
+    await recordAuditEvent(tx, {
+      ...actorAuditFields(actor),
+      companyId: plan.company.id,
+      agentId: plan.agent.id,
+      taskId: plan.task?.id,
+      resourceType: "agent_run",
+      resourceId: reviewedRunId,
+      action: "agent_run.second_opinion_requested",
+      description: `Second opinion requested from ${reviewerProvider} for run ${reviewedRunId}`,
+      metadata: { reviewerRunId: runId, reviewerProvider },
+    });
+    return { status: "started", runId };
+  });
+}
+
 /** Re-plans at execution time (fresh permissions/isolation) — used by the worker. */
 export async function planForRun(db: Database, env: ExecutionEnv, runId: string): Promise<RunPlan> {
   const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId));
   if (!run) throw new NotFoundError("Run", runId);
   const viewerMaxSensitivity = asSensitivity(run.viewerMaxSensitivity);
+  if (run.runPurpose === "second_opinion") {
+    if (!run.reviewedRunId)
+      throw new ConflictError("Second-opinion run is missing the run it reviews");
+    const plan = await planReviewRun(db, env, run.reviewedRunId, run.provider, {
+      viewerMaxSensitivity,
+    });
+    if (plan.company.id !== run.companyId)
+      throw new ForbiddenError("Run company changed since the review was requested");
+    return plan;
+  }
   if (run.executionType === "task") {
     const plan = await planTaskRun(db, env, run.taskId!, {
       viewerMaxSensitivity,
       requestedTier: run.tier,
       responseDetail: run.responseDetail,
+      // Pin the provider actually chosen at creation time (whether by explicit
+      // person choice or by preference routing) — re-planning re-verifies it is
+      // still allowed/available, but never silently reroutes to a different one.
+      requestedProvider: run.provider,
     });
     if (plan.agent.id !== run.agentId || plan.company.id !== run.companyId)
       throw new ForbiddenError("Task assignment changed since the run was created");
@@ -1280,6 +1610,7 @@ export async function planForRun(db: Database, env: ExecutionEnv, runId: string)
   const plan = await planChatRun(db, env, run.conversationId!, human.content, {
     viewerMaxSensitivity,
     excludeMessageId: human.id,
+    requestedProvider: run.provider,
   });
   if (plan.company.id !== run.companyId) throw new ForbiddenError("Conversation company changed");
   if (plan.problems.length) throw new ConflictError(plan.problems.join("; "));

@@ -1,6 +1,6 @@
 import type { ProviderCapability } from "@aibos/shared";
 import { estimateCost, estimateTokens } from "./pricing";
-import { priceModelFor, type ProviderModelConfig } from "./models";
+import type { ProviderModelConfig } from "./models";
 import {
   ProviderError,
   type AIProvider,
@@ -12,59 +12,52 @@ import {
   type StreamHandlers,
 } from "./types";
 
-export interface MockClaudeOptions {
+export interface MockCodexOptions {
   /** Delay between streamed chunks (ms). */
   chunkDelayMs?: number;
   /** Errors to throw on successive calls (then succeed). */
   failures?: ProviderError[];
   /** Override the structured result produced. */
   result?: (request: ProviderRequest) => unknown;
-  /** Pretend credentials are missing. */
+  /** Pretend the CLI is not authenticated. */
   configured?: boolean;
-  /** Which Claude transport to impersonate (default: Claude Code subscription). */
-  transport?: "claude_code_cli" | "anthropic_api";
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted)
-      return reject(new ProviderError("CANCELLED", "Request cancelled", { provider: "CLAUDE" }));
+      return reject(new ProviderError("CANCELLED", "Request cancelled", { provider: "OPENAI" }));
     const t = setTimeout(resolve, ms);
     signal?.addEventListener(
       "abort",
       () => {
         clearTimeout(t);
-        reject(new ProviderError("CANCELLED", "Request cancelled", { provider: "CLAUDE" }));
+        reject(new ProviderError("CANCELLED", "Request cancelled", { provider: "OPENAI" }));
       },
       { once: true },
     );
   });
 
 /**
- * Deterministic Claude stand-in for tests and local development. Never makes
- * network calls. Simulates streaming, prompt-cache accounting (a repeated
- * cacheable prefix is reported as cache reads), cancellation and failures.
+ * Deterministic Codex/OpenAI stand-in for tests and local development. Never
+ * makes network calls and never consumes ChatGPT subscription usage.
  */
-export class MockClaudeProvider implements AIProvider {
-  readonly providerId = "CLAUDE" as const;
-  readonly displayName = "Claude (mock)";
+export class MockCodexProvider implements AIProvider {
+  readonly providerId = "OPENAI" as const;
+  readonly displayName = "Codex (mock)";
   readonly isMock = true;
-  readonly transport: "claude_code_cli" | "anthropic_api";
-  readonly authMode: "subscription_login" | "api_key";
-  readonly billingMode: "subscription" | "api";
+  readonly transport = "codex_cli" as const;
+  readonly authMode = "subscription_login" as const;
+  readonly billingMode = "subscription" as const;
   readonly calls: ProviderRequest[] = [];
-  private readonly seenPrefixes = new Set<string>();
   private readonly inflight = new Map<string, AbortController>();
   private readonly failures: ProviderError[];
 
   constructor(
     private readonly models: ProviderModelConfig,
-    private readonly options: MockClaudeOptions = {},
+    private readonly options: MockCodexOptions = {},
   ) {
     this.failures = [...(options.failures ?? [])];
-    this.transport = options.transport ?? "claude_code_cli";
-    this.authMode = this.transport === "claude_code_cli" ? "subscription_login" : "api_key";
-    this.billingMode = this.transport === "claude_code_cli" ? "subscription" : "api";
   }
 
   available(): boolean {
@@ -80,35 +73,26 @@ export class MockClaudeProvider implements AIProvider {
     input: { model: string; inputTokens: number; maxOutputTokens: number },
     price: ModelPrice | null,
   ): CostEstimate {
-    return estimateCost(price, { provider: "CLAUDE", ...input });
+    return estimateCost(price, { provider: "OPENAI", ...input });
   }
   async healthCheck(opts: { probe?: boolean } = {}): Promise<ProviderHealthResult> {
     return {
-      provider: "CLAUDE",
-      state: this.available()
-        ? "available"
-        : this.transport === "claude_code_cli"
-          ? "login_required"
-          : "not_configured",
+      provider: "OPENAI",
+      state: this.available() ? "available" : "login_required",
       checkedAt: new Date(),
       detail: this.available()
         ? opts.probe
           ? "Mock connection verified"
           : "Mock provider"
-        : this.transport === "claude_code_cli"
-          ? "Login required. Open Terminal and run: claude login"
-          : "Mock provider not configured",
-      cli:
-        this.transport === "claude_code_cli"
-          ? {
-              binary: "mock",
-              version: "mock",
-              loggedIn: this.available(),
-              authMethod: "mock",
-              apiProvider: "firstParty",
-              subscriptionType: null,
-            }
-          : null,
+        : "Login required. Open Terminal and run: codex",
+      cli: {
+        binary: "mock",
+        version: "mock",
+        loggedIn: this.available(),
+        authMethod: "mock",
+        apiProvider: null,
+        subscriptionType: null,
+      },
     };
   }
   execute(request: ProviderRequest): Promise<ProviderResult> {
@@ -117,13 +101,9 @@ export class MockClaudeProvider implements AIProvider {
 
   async stream(request: ProviderRequest, handlers: StreamHandlers): Promise<ProviderResult> {
     if (!this.available())
-      throw this.transport === "claude_code_cli"
-        ? new ProviderError("LOGIN_REQUIRED", "Login required. Run in Terminal: claude login", {
-            provider: "CLAUDE",
-          })
-        : new ProviderError("PROVIDER_NOT_CONFIGURED", "Anthropic credential not configured", {
-            provider: "CLAUDE",
-          });
+      throw new ProviderError("LOGIN_REQUIRED", "Login required. Run in Terminal: codex", {
+        provider: "OPENAI",
+      });
     this.calls.push(request);
     const controller = new AbortController();
     request.signal?.addEventListener("abort", () => controller.abort(), { once: true });
@@ -142,7 +122,7 @@ export class MockClaudeProvider implements AIProvider {
                   ? defaultReview(userText)
                   : defaultResult(userText)),
             )
-          : `[Mock Claude — no AI was called] I received your message: "${lastUser(request).slice(0, 200)}". ` +
+          : `[Mock Codex — no AI was called] I received your message: "${lastUser(request).slice(0, 200)}". ` +
             "I can only use my approved company context and have no external tools.";
       handlers.onStart?.();
       const chunks = output.match(/.{1,48}/gs) ?? [output];
@@ -150,28 +130,19 @@ export class MockClaudeProvider implements AIProvider {
         await sleep(this.options.chunkDelayMs ?? 0, controller.signal);
         handlers.onText?.(c);
       }
-      // Cache simulation: cacheable system prefix seen before → cache read.
-      const prefix = request.system
-        .filter((b) => b.cache)
-        .map((b) => b.text)
-        .join("\n");
-      const prefixTokens = estimateTokens(prefix);
-      const hit = prefix.length > 0 && this.seenPrefixes.has(prefix);
-      if (prefix) this.seenPrefixes.add(prefix);
       const allInput = estimateTokens(request.system.map((b) => b.text).join("\n") + userText);
       return {
-        provider: "CLAUDE",
-        // Claude Code reports the resolved model for an alias; mimic that.
-        model: this.transport === "claude_code_cli" ? priceModelFor(request.model) : request.model,
+        provider: "OPENAI",
+        model: request.model,
         text: output,
         structured: request.output.kind === "structured" ? JSON.parse(output) : null,
         stopReason: "end_turn",
-        requestId: `mock_req_${request.runId.slice(0, 8)}`,
+        requestId: `mock_codex_${request.runId.slice(0, 8)}`,
         usage: {
-          inputTokens: Math.max(1, allInput - prefixTokens),
+          inputTokens: allInput,
           outputTokens: estimateTokens(output),
-          cacheCreationTokens: hit ? 0 : prefixTokens,
-          cacheReadTokens: hit ? prefixTokens : 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
         },
         latencyMs: Date.now() - started,
       };
@@ -186,7 +157,7 @@ export class MockClaudeProvider implements AIProvider {
   normalizeError(err: unknown): ProviderError {
     return err instanceof ProviderError
       ? err
-      : new ProviderError("UNKNOWN", "Mock provider failure", { provider: "CLAUDE" });
+      : new ProviderError("UNKNOWN", "Mock provider failure", { provider: "OPENAI" });
   }
 }
 
@@ -201,12 +172,9 @@ function defaultResult(userText: string) {
   const title = /<task_title>([\s\S]*?)<\/task_title>/.exec(userText)?.[1]?.trim() ?? "the task";
   return {
     status: "completed",
-    summary: `[Mock Claude] Internal summary for "${title}" using only the supplied context.`,
+    summary: `[Mock Codex] Internal summary for "${title}" using only the supplied context.`,
     response: `This is a deterministic development response for "${title}". No AI provider was called and no external action was taken.`,
-    keyFindings: [
-      "Context was supplied by the Context Engine",
-      "No external research was performed",
-    ],
+    keyFindings: ["Context was supplied by the Context Engine", "No external research was performed"],
     proposedNextActions: ["Review the result", "Decide on follow-up tasks"],
     proposedHandoffs: [],
     proposedKnowledgeDrafts: [],
@@ -227,6 +195,6 @@ function defaultReview(userText: string) {
     risks: [],
     suggestedCorrections: [],
     confidence: "low",
-    overallReviewSummary: `[Mock Claude review] The original result for "${title}" appears supported by the supplied context.`,
+    overallReviewSummary: `[Mock Codex review] The original result for "${title}" appears supported by the supplied context.`,
   };
 }

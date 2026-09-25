@@ -1,10 +1,20 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EffortLevel, ProviderCapability } from "@aibos/shared";
 import { estimateCost } from "./pricing";
 import type { ProviderModelConfig } from "./models";
+import {
+  Semaphore,
+  activeChildrenFor,
+  killAllChildrenFor,
+  runCommand,
+  terminate,
+  toIso,
+  trackChild,
+} from "./subprocess";
+import { parseJsonOutput } from "./text-output";
 import {
   ProviderError,
   type AIProvider,
@@ -139,7 +149,6 @@ const MODEL_ARG = /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,63}$/;
 const EFFORTS: readonly EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
 const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
-const KILL_GRACE_MS = 3_000;
 
 export const CLAUDE_CODE_SETUP_STEPS = [
   "Install Claude Code if necessary.",
@@ -149,96 +158,12 @@ export const CLAUDE_CODE_SETUP_STEPS = [
   "Return here and click TEST CONNECTION.",
 ] as const;
 
-/* ---------- child-process registry (no orphans) ---------- */
-
-const liveChildren = new Set<ChildProcess>();
-let exitHookInstalled = false;
-function trackChild(child: ChildProcess) {
-  liveChildren.add(child);
-  child.once("exit", () => liveChildren.delete(child));
-  if (!exitHookInstalled) {
-    exitHookInstalled = true;
-    // If the worker exits, no Claude Code child may keep running on its own.
-    process.once("exit", () => {
-      for (const c of liveChildren) c.kill("SIGKILL");
-    });
-  }
-}
 /** For graceful worker shutdown: stop every running Claude Code child. */
 export function killAllClaudeCodeChildren(): number {
-  const n = liveChildren.size;
-  for (const c of liveChildren) terminate(c);
-  return n;
+  return killAllChildrenFor("CLAUDE");
 }
 export function activeClaudeCodeChildren(): number {
-  return liveChildren.size;
-}
-
-function alive(child: ChildProcess) {
-  return child.exitCode === null && child.signalCode === null;
-}
-function terminate(child: ChildProcess) {
-  if (!alive(child)) return;
-  child.kill("SIGTERM");
-  const t = setTimeout(() => {
-    if (alive(child)) child.kill("SIGKILL");
-  }, KILL_GRACE_MS);
-  t.unref();
-  child.once("exit", () => clearTimeout(t));
-}
-
-/* ---------- small helpers ---------- */
-
-interface CommandResult {
-  code: number | null;
-  stdout: string;
-  stderr: string;
-  missing: boolean;
-  timedOut: boolean;
-}
-
-/** Runs a short local CLI command with an argument array — never a shell. */
-function runCommand(
-  binary: string,
-  args: string[],
-  env: Record<string, string>,
-  timeoutMs: number,
-): Promise<CommandResult> {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let child: ChildProcess;
-    try {
-      child = spawn(binary, args, { env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      return resolve({ code: null, stdout, stderr, missing: true, timedOut });
-    }
-    trackChild(child);
-    const timer = setTimeout(() => {
-      timedOut = true;
-      terminate(child);
-    }, timeoutMs);
-    child.stdout?.on("data", (d: Buffer) => {
-      if (stdout.length < 256 * 1024) stdout += d.toString("utf8");
-    });
-    child.stderr?.on("data", (d: Buffer) => {
-      if (stderr.length < MAX_STDERR_BYTES) stderr += d.toString("utf8");
-    });
-    child.once("error", (err: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      resolve({ code: null, stdout, stderr, missing: err.code === "ENOENT", timedOut });
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, missing: false, timedOut });
-    });
-  });
-}
-
-function toIso(epoch: unknown): string | null {
-  if (typeof epoch !== "number" || !Number.isFinite(epoch)) return null;
-  return new Date(epoch < 1e12 ? epoch * 1000 : epoch).toISOString();
+  return activeChildrenFor("CLAUDE");
 }
 
 function rateLimitFrom(info: unknown): RateLimitState | null {
@@ -269,49 +194,6 @@ export function claudeCodeInputs(request: ProviderRequest): { system: string; pr
   return { system: system + structured, prompt };
 }
 
-/** Accepts bare JSON or JSON wrapped in one code fence; nothing else. */
-export function parseJsonOutput(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```$/.exec(trimmed);
-  return JSON.parse(fenced ? fenced[1]! : trimmed);
-}
-
-/* ---------- semaphore (subscription capacity is finite) ---------- */
-
-class Semaphore {
-  private active = 0;
-  private readonly waiters: (() => void)[] = [];
-  constructor(private readonly max: number) {}
-  get inUse() {
-    return this.active;
-  }
-  async acquire(signal?: AbortSignal): Promise<() => void> {
-    if (this.active >= this.max)
-      await new Promise<void>((resolve, reject) => {
-        const onAbort = () => {
-          const i = this.waiters.indexOf(go);
-          if (i >= 0) this.waiters.splice(i, 1);
-          reject(new ProviderError("CANCELLED", "Request cancelled", { provider: "CLAUDE" }));
-        };
-        const go = () => {
-          signal?.removeEventListener("abort", onAbort);
-          resolve();
-        };
-        if (signal?.aborted) return onAbort();
-        signal?.addEventListener("abort", onAbort, { once: true });
-        this.waiters.push(go);
-      });
-    this.active++;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.active--;
-      this.waiters.shift()?.();
-    };
-  }
-}
-
 /* ---------- provider ---------- */
 
 interface CliCapabilities {
@@ -335,7 +217,7 @@ export class ClaudeCodeProvider implements AIProvider {
   private knownUnusable: string | null = null;
 
   constructor(readonly config: ClaudeCodeConfig) {
-    this.semaphore = new Semaphore(config.maxConcurrency);
+    this.semaphore = new Semaphore(config.maxConcurrency, "CLAUDE");
   }
 
   get maxConcurrency() {
@@ -376,13 +258,13 @@ export class ClaudeCodeProvider implements AIProvider {
     if (!force && this.caps && Date.now() - this.caps.at < 5 * 60_000) return this.caps.value;
     const env = this.childEnv();
     const timeout = this.config.checkTimeoutMs ?? 15_000;
-    const version = await runCommand(this.config.binary, ["--version"], env, timeout);
+    const version = await runCommand("CLAUDE", this.config.binary, ["--version"], env, timeout);
     if (version.missing || version.code !== 0) {
       const value = { installed: false, version: null, flags: new Set<string>(), missing: [] };
       this.caps = { at: Date.now(), value };
       return value;
     }
-    const help = await runCommand(this.config.binary, ["--help"], env, timeout);
+    const help = await runCommand("CLAUDE", this.config.binary, ["--help"], env, timeout);
     const flags = new Set(help.stdout.match(/--[a-z][a-z-]+/g) ?? []);
     const value = {
       installed: true,
@@ -401,6 +283,7 @@ export class ClaudeCodeProvider implements AIProvider {
   /** `claude auth status --json` — the supported way to learn login state (no credential access). */
   async authStatus(): Promise<CliInfo> {
     const r = await runCommand(
+      "CLAUDE",
       this.config.binary,
       ["auth", "status", "--json"],
       this.childEnv(),
@@ -599,7 +482,7 @@ export class ClaudeCodeProvider implements AIProvider {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
       });
-      trackChild(child);
+      trackChild(child, "CLAUDE");
 
       let settled = false;
       let failure: ProviderError | null = null;

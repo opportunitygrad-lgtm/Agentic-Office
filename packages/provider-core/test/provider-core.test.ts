@@ -1,10 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
-import { AGENT_EXECUTION_RESULT_JSON_SCHEMA } from "@aibos/shared";
+import { AGENT_EXECUTION_RESULT_JSON_SCHEMA, type ProviderType } from "@aibos/shared";
 import {
   CLAUDE_CODE_MODEL_DEFAULTS,
   CLAUDE_MODEL_DEFAULTS,
   ClaudeProvider,
+  CodexCliProvider,
   MockClaudeProvider,
   NotConnectedProvider,
   ProviderError,
@@ -229,9 +230,9 @@ describe("MockClaudeProvider", () => {
 });
 
 describe("registry & configuration", () => {
-  it("keeps OpenAI and Grok disconnected and never falls back silently", async () => {
+  it("keeps Grok disconnected (and OpenAI's optional API transport) and never falls back silently", async () => {
     const reg = createProviderRegistry({
-      env: { CLAUDE_TRANSPORT: "anthropic_api" },
+      env: { CLAUDE_TRANSPORT: "anthropic_api", OPENAI_TRANSPORT: "openai_api" },
       mode: "live",
     });
     expect(reg.get("CLAUDE").available()).toBe(false);
@@ -242,6 +243,17 @@ describe("registry & configuration", () => {
       });
     }
     expect(reg.get("LOCAL").available()).toBe(true);
+  });
+
+  it("defaults OPENAI to the Codex CLI subscription transport, never an API key", () => {
+    const reg = createProviderRegistry({ env: {}, mode: "live" });
+    expect(reg.get("OPENAI")).toBeInstanceOf(CodexCliProvider);
+    expect(reg.get("OPENAI")).toMatchObject({
+      transport: "codex_cli",
+      authMode: "subscription_login",
+      billingMode: "subscription",
+    });
+    expect(() => createProviderRegistry({ env: { OPENAI_TRANSPORT: "bogus" } })).toThrow();
   });
 
   it("reads model ids and effort from configuration and refuses mock mode in production", () => {
@@ -401,6 +413,41 @@ describe("routeExecution", () => {
     ).toMatch(/no usable fallback/);
     const task = { ...baseRoute().task!, providerRequirement: "OPENAI" as const };
     expect(routeExecution(baseRoute({ task })).blockedReason).toMatch(/PROVIDER_NOT_CONFIGURED/);
+  });
+
+  it("honours an explicit requestedProvider, bound by company policy and availability", () => {
+    const openaiUp = baseRoute().providers.map((p) =>
+      p.provider === "OPENAI"
+        ? { ...p, available: true, reasoning: true, transport: "codex_cli" as const, billingMode: "subscription" as const }
+        : p,
+    );
+    const models = { ...baseRoute().models, OPENAI: CLAUDE_MODEL_DEFAULTS };
+    // Explicitly selected for this run — never the agent/company default preference.
+    const r = routeExecution(
+      baseRoute({ providers: openaiUp, models, requestedProvider: "OPENAI" }),
+    );
+    expect(r).toMatchObject({ provider: "OPENAI", blockedReason: null });
+    expect(r.reasons).toEqual(expect.arrayContaining(["OPENAI: explicitly selected for this run"]));
+
+    // Company policy still wins: a disallowed requested provider is blocked, never silently swapped.
+    const restricted = { ...baseRoute().company, allowedProviders: ["CLAUDE"] as ProviderType[] };
+    expect(
+      routeExecution(
+        baseRoute({ providers: openaiUp, models, company: restricted, requestedProvider: "OPENAI" }),
+      ).blockedReason,
+    ).toMatch(/not permitted by company policy/);
+
+    // Availability still wins: requesting an unavailable provider blocks rather than falling back.
+    expect(
+      routeExecution(baseRoute({ requestedProvider: "OPENAI" })).blockedReason,
+    ).toMatch(/PROVIDER_NOT_CONFIGURED/);
+
+    // A hard task requirement always outranks a person's requested provider.
+    const task = { ...baseRoute().task!, providerRequirement: "CLAUDE" as const };
+    expect(
+      routeExecution(baseRoute({ providers: openaiUp, models, task, requestedProvider: "OPENAI" }))
+        .provider,
+    ).toBe("CLAUDE");
   });
 
   it("routes subscription Claude without API spend; the price only feeds a NOT BILLED estimate", () => {

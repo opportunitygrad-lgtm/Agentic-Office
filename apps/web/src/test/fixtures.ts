@@ -91,6 +91,7 @@ export function agent(extra: Partial<AgentDTO> & Pick<AgentDTO, "id" | "name">):
     companies: [{ ...ept, isPrimary: true }],
     primaryProvider: "CLAUDE",
     fallbackProvider: "OPENAI",
+    preferredReviewerProvider: null,
     preferredModel: null,
     autonomyLevel: "observe",
     responsibilities: ["Desk research"],

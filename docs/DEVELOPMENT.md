@@ -72,6 +72,7 @@ Prompts for the password; refuses if any user exists. See docs/SECURITY.md.
 | `pnpm test`                                   | All Vitest suites (unit, DB, API, frontend). DB/API tests need `infra:up`   |
 | `pnpm test:e2e`                               | Playwright flows (needs `pnpm dev`; execution flows need mock mode, below)  |
 | `pnpm test:claude-live`                       | Guarded live Claude smoke (see "Claude configuration")                      |
+| `pnpm test:openai-subscription-live`          | Guarded live OpenAI Codex smoke (see "Codex configuration")                 |
 | `pnpm typecheck`                              | `tsc --noEmit` in every workspace                                           |
 | `pnpm lint`                                   | ESLint (zero warnings allowed)                                              |
 | `pnpm format` / `format:check`                | Prettier                                                                    |
@@ -126,6 +127,49 @@ set `CLAUDE_TRANSPORT=anthropic_api` plus `ANTHROPIC_API_KEY` (see
   verifies streaming, persistence, audit and SUBSCRIPTION usage (API cost N/A).
   Never part of `pnpm test` or `pnpm test:e2e`, never uses Opus.
 - Optional API transport smoke: `ALLOW_LIVE_AI_TESTS=true pnpm test:claude-live`.
+
+## Codex configuration (Stage 06 — OpenAI Codex subscription)
+
+OpenAI runs through **your own Codex CLI login** (ChatGPT subscription). No
+API key is needed. In Terminal, on the machine and user account that run
+`pnpm dev` (the worker):
+
+```bash
+unset OPENAI_API_KEY
+codex login          # sign in with your ChatGPT account
+```
+
+Then open Settings → AI Providers and click **TEST CODEX CONNECTION**. Never
+paste ChatGPT credentials into this app or into a chat — the app never asks
+for them. Defaults (`.env`):
+
+```
+OPENAI_TRANSPORT=codex_cli
+CODEX_BINARY=codex
+CODEX_DEFAULT_MODEL=auto
+CODEX_DEFAULT_REASONING=medium
+CODEX_MAX_CONCURRENCY=1
+```
+
+If Codex is missing or logged out, the provider card shows the setup steps
+and runs are blocked with the Terminal instruction. The optional API
+transport (`OPENAI_TRANSPORT=openai_api`) is declared but **not
+implemented** in this stage — selecting it marks OPENAI as not connected;
+it is never a silent fallback.
+
+- **Mock mode (no usage):** `AIBOS_AI_PROVIDER_MODE=mock pnpm dev` also swaps
+  in the deterministic mock Codex provider for OPENAI (same flag as Claude).
+- **Fake Codex CLI (no usage):**
+  `CODEX_BINARY=$PWD/packages/provider-core/test/fixtures/fake-codex.mjs`
+  runs the real spawn/stream path against a scripted CLI (scenario in
+  `$CODEX_HOME/scenario.json`).
+- **Live subscription smoke (acceptance):**
+  `ALLOW_LIVE_AI_TESTS=true pnpm test:openai-subscription-live` — CLI/login
+  checks, one short Codex task on a `[DEV SMOKE TEST]` EPT task, and one
+  second-opinion review of a **stored fixture** result (never a live Claude
+  call, so this never spends two providers' subscriptions in one run);
+  verifies streaming, persistence, audit and SUBSCRIPTION usage (API cost
+  N/A). Never part of `pnpm test` or `pnpm test:e2e`.
 
 ## Tests
 

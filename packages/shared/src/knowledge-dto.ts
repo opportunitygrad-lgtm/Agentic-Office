@@ -11,6 +11,7 @@ import type {
   TaskType,
 } from "./enums";
 import type { AuditEventDTO, CompanyDTO, CompanyRef } from "./dto";
+import type { ProviderSelectionMode, SecondOpinionMode } from "./execution";
 import type {
   AiPolicyMode,
   BrandRuleCategory,
@@ -81,6 +82,13 @@ export interface CompanyAiPolicyDTO {
   premiumAllowed: boolean;
   maxResponseDetail: "short" | "normal" | "detailed" | "custom";
   fallbackAllowed: boolean;
+  /** Stage 06: multi-provider routing and second-opinion policy. */
+  providerSelection: ProviderSelectionMode;
+  reviewMode: SecondOpinionMode;
+  reviewProvider: ProviderType | null;
+  reviewTaskTypes: string[];
+  highValueThresholdUsd: number | null;
+  maxReviewsPerTask: number;
   updatedAt: string | null;
 }
 

@@ -61,7 +61,7 @@ export const FINAL_RUN_STATUSES: readonly AgentRunStatus[] = [
   "needs_review",
 ];
 
-export const RUN_EXECUTION_TYPES = ["task", "chat", "connection_test"] as const;
+export const RUN_EXECUTION_TYPES = ["task", "chat", "connection_test", "review"] as const;
 export type RunExecutionType = (typeof RUN_EXECUTION_TYPES)[number];
 
 export const RUN_EVENT_TYPES = [
@@ -83,6 +83,8 @@ export const RUN_EVENT_TYPES = [
   "RUN_CANCELLED",
   "RUN_FAILED",
   "RUN_NEEDS_REVIEW",
+  // Stage 06: second-opinion review runs
+  "REVIEW_COMPLETED",
 ] as const;
 export type RunEventType = (typeof RUN_EVENT_TYPES)[number];
 
@@ -101,6 +103,7 @@ export const RUN_PHASE_LABELS: Partial<Record<RunEventType, string>> = {
   USAGE_RECORDED: "Usage recorded",
   RESULT_VALIDATED: "Result validated",
   TASK_COMPLETED: "Task completed",
+  REVIEW_COMPLETED: "Review completed",
   CANCEL_REQUESTED: "Stop requested",
   RUN_CANCELLED: "Stopped",
   RUN_FAILED: "Failed",
@@ -112,11 +115,22 @@ export const RUN_PHASE_LABELS: Partial<Record<RunEventType, string>> = {
  * subscription-authenticated Claude Code CLI; the Anthropic API transport is
  * optional and only used when deliberately configured (CLAUDE_TRANSPORT).
  */
-export const PROVIDER_TRANSPORTS = ["claude_code_cli", "anthropic_api", "local", "none"] as const;
+export const PROVIDER_TRANSPORTS = [
+  "claude_code_cli",
+  "anthropic_api",
+  // Stage 06: OpenAI via the official Codex CLI (ChatGPT subscription login, default)
+  // or, only when deliberately configured, the optional Anthropic-style API transport.
+  "codex_cli",
+  "openai_api",
+  "local",
+  "none",
+] as const;
 export type ProviderTransport = (typeof PROVIDER_TRANSPORTS)[number];
 export const TRANSPORT_LABELS: Record<ProviderTransport, string> = {
   claude_code_cli: "Local Claude Code",
   anthropic_api: "Anthropic API",
+  codex_cli: "Local Codex CLI",
+  openai_api: "OpenAI API",
   local: "Local logic",
   none: "Not connected",
 };
@@ -127,6 +141,39 @@ export const BILLING_MODES = ["subscription", "api", "none"] as const;
 export type BillingMode = (typeof BILLING_MODES)[number];
 export const API_EQUIVALENT_LABEL = "NOT BILLED — ESTIMATED API EQUIVALENT";
 
+/**
+ * Stage 06: what a run is FOR. PRIMARY is ordinary task/chat execution.
+ * SECOND_OPINION is an independent review of another (PRIMARY) run's
+ * completed result by a different provider. QUALITY_REVIEW and
+ * FUTURE_TOOL_RUN are reserved for later stages.
+ */
+export const RUN_PURPOSES = [
+  "primary",
+  "second_opinion",
+  "quality_review",
+  "future_tool_run",
+] as const;
+export type RunPurpose = (typeof RUN_PURPOSES)[number];
+
+/**
+ * Company-level control over second-opinion review: OFF (never offered),
+ * MANUAL (a permitted person can ask for one), POLICY_REQUIRED (certain task
+ * types should be reviewed before being treated as done — enforcement is a
+ * later stage), HIGH_VALUE_ONLY (offered above a cost/complexity threshold).
+ * Never enabled globally by default; review is never automatic.
+ */
+export const SECOND_OPINION_MODES = [
+  "off",
+  "manual",
+  "policy_required",
+  "high_value_only",
+] as const;
+export type SecondOpinionMode = (typeof SECOND_OPINION_MODES)[number];
+
+/** How a company resolves its "primary" AI provider. */
+export const PROVIDER_SELECTION_MODES = ["fixed", "auto"] as const;
+export type ProviderSelectionMode = (typeof PROVIDER_SELECTION_MODES)[number];
+
 export const PROVIDER_HEALTH_STATES = [
   "not_configured",
   "available",
@@ -134,7 +181,7 @@ export const PROVIDER_HEALTH_STATES = [
   "rate_limited",
   "auth_error",
   "unavailable",
-  // Claude Code subscription transport (Stage 05A)
+  // CLI subscription transports (Claude Code Stage 05A, Codex Stage 06)
   "not_installed",
   "login_required",
   "login_expired",
@@ -243,12 +290,69 @@ export const AGENT_EXECUTION_RESULT_JSON_SCHEMA = (() => {
   });
 })();
 
+/**
+ * Independent critique of another provider's completed result (Stage 06:
+ * second-opinion engine). Deliberately has NO "winner"/ranking field — the
+ * purpose is neutral critique, never "Claude wins" / "OpenAI wins". This is
+ * AI-generated analysis, not company truth: it can propose corrections or
+ * further research but never alters approved knowledge, policy or financial
+ * rules, sends anything externally, or approves another AI result.
+ */
+export const providerReviewSchema = z.strictObject({
+  agreementPoints: z.array(z.string().max(1_000)).max(20),
+  disagreementPoints: z.array(z.string().max(1_000)).max(20),
+  possibleErrors: z.array(z.string().max(1_000)).max(20),
+  missingConsiderations: z.array(z.string().max(1_000)).max(20),
+  unsupportedClaims: z.array(z.string().max(1_000)).max(20),
+  risks: z.array(z.string().max(1_000)).max(20),
+  suggestedCorrections: z.array(z.string().max(1_000)).max(20),
+  confidence: z.enum(EXECUTION_CONFIDENCE),
+  overallReviewSummary: z.string().max(3_000),
+});
+export type ProviderReview = z.infer<typeof providerReviewSchema>;
+
+export const PROVIDER_REVIEW_JSON_SCHEMA = (() => {
+  const strList = { type: "array", items: { type: "string" } };
+  return {
+    type: "object",
+    properties: {
+      agreementPoints: strList,
+      disagreementPoints: strList,
+      possibleErrors: strList,
+      missingConsiderations: strList,
+      unsupportedClaims: strList,
+      risks: strList,
+      suggestedCorrections: strList,
+      confidence: { type: "string", enum: [...EXECUTION_CONFIDENCE] },
+      overallReviewSummary: { type: "string" },
+    },
+    required: [
+      "agreementPoints",
+      "disagreementPoints",
+      "possibleErrors",
+      "missingConsiderations",
+      "unsupportedClaims",
+      "risks",
+      "suggestedCorrections",
+      "confidence",
+      "overallReviewSummary",
+    ],
+    additionalProperties: false,
+  };
+})();
+
 /* ---------- API inputs ---------- */
 
 export const startTaskRunSchema = z.strictObject({
   /** Explicit tier override for this run (premium still needs company permission). */
   modelTier: z.enum(MODEL_TIERS).optional(),
   responseDetail: z.enum(RESPONSE_DETAILS).optional(),
+  /**
+   * Stage 06: explicit provider choice for this run (still bound by company
+   * policy and availability — never a bypass). Omit to use the normal
+   * agent/company routing.
+   */
+  provider: z.enum(["CLAUDE", "OPENAI", "GROK", "LOCAL"]).optional(),
   /** Client idempotency key: repeated clicks with the same key return the same run. */
   idempotencyKey: z.string().trim().min(8).max(100).optional(),
 });
@@ -256,6 +360,8 @@ export type StartTaskRunInput = z.input<typeof startTaskRunSchema>;
 
 export const chatSendSchema = z.strictObject({
   content: z.string().trim().min(1).max(4_000),
+  /** Stage 06: reply with a specific provider when the agent/company allow choosing. */
+  provider: z.enum(["CLAUDE", "OPENAI", "GROK", "LOCAL"]).optional(),
   idempotencyKey: z.string().trim().min(8).max(100).optional(),
 });
 
@@ -278,7 +384,18 @@ export const agentProviderSettingsSchema = z.strictObject({
   fallbackProvider: z.enum(["CLAUDE", "OPENAI", "GROK", "LOCAL"]).nullable(),
   preferredModelTier: z.enum(MODEL_TIERS),
   defaultEffort: z.enum(EFFORT_LEVELS).nullable(),
+  /** Stage 06: who reviews this agent's results by default when a review is requested. */
+  preferredReviewerProvider: z.enum(["CLAUDE", "OPENAI", "GROK", "LOCAL"]).nullable(),
 });
+
+/* ---------- second-opinion review (Stage 06) ---------- */
+
+export const requestReviewSchema = z.strictObject({
+  reviewerProvider: z.enum(["CLAUDE", "OPENAI", "GROK", "LOCAL"]).optional(),
+  /** Explicit re-review even though one already exists for this reviewer. */
+  force: z.boolean().optional(),
+});
+export type RequestReviewInput = z.input<typeof requestReviewSchema>;
 
 /* ---------- DTOs ---------- */
 
@@ -358,6 +475,10 @@ export interface AgentRunDTO {
   number: number;
   executionType: RunExecutionType;
   status: AgentRunStatus;
+  /** PRIMARY (ordinary) or SECOND_OPINION (an independent review of another run). */
+  purpose: RunPurpose;
+  /** Set only when purpose is SECOND_OPINION: the run being reviewed. */
+  reviewedRunId: string | null;
   company: CompanyRef | null;
   task: { id: string; title: string } | null;
   agent: { id: string; name: string } | null;
@@ -401,7 +522,7 @@ export interface AgentRunDTO {
   phase: string;
   feedback: { rating: "useful" | "not_useful"; note: string | null; by: string | null } | null;
   proposals: { handoffs: number; knowledgeDrafts: number };
-  viewer: { canStop: boolean; canFeedback: boolean };
+  viewer: { canStop: boolean; canFeedback: boolean; canRequestReview: boolean };
 }
 
 export interface AgentRunEventDTO {
@@ -416,6 +537,21 @@ export interface AgentRunEventDTO {
 
 export interface AgentRunDetailDTO extends AgentRunDTO {
   events: AgentRunEventDTO[];
+  /** Populated only on a SECOND_OPINION run once completed. */
+  review: ProviderReview | null;
+}
+
+/** One independently-requested critique of a completed run's result. */
+export interface ProviderReviewDTO {
+  id: string;
+  reviewedRunId: string;
+  /** The review's own run (carries status, streaming, cost/usage, cancellation). */
+  reviewRun: AgentRunDTO;
+  reviewerProvider: ProviderType;
+  reviewerModel: string | null;
+  requestedBy: string | null;
+  requestedAt: string;
+  review: ProviderReview | null;
 }
 
 /** Server-sent run stream message. */

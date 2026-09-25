@@ -134,6 +134,16 @@ const CATEGORIES: { category: string; permissions: Omit<PermissionDefinition, "c
         "Change provider models, effort defaults and provider budgets.",
         { scope: "global", sensitive: true },
       ),
+      p(
+        "ai.review.request",
+        "Request a second opinion",
+        "Ask another AI provider to independently review a completed agent run.",
+      ),
+      p(
+        "ai.review.view",
+        "View second opinions",
+        "See second-opinion review results for agent runs.",
+      ),
     ],
   },
   {

@@ -14,7 +14,9 @@ import {
   PROVIDER_LABELS,
   PROVIDER_TYPES,
   RUN_PHASE_LABELS,
+  agentExecutionResultSchema,
   agentProviderSettingsSchema,
+  providerReviewSchema,
   providerSettingsSchema,
   runFeedbackSchema,
   type AgentExecutionResult,
@@ -26,10 +28,12 @@ import {
   type BillingMode,
   type ProviderErrorCode,
   type ProviderHealthState,
+  type ProviderReview,
   type ProviderStatusDTO,
   type ProviderTransport,
   type ProviderType,
   type RunEventType,
+  type RunPurpose,
   type RunStreamMessage,
 } from "@aibos/shared";
 import type { z } from "zod";
@@ -39,6 +43,7 @@ import {
   agentCompanyAssignments,
   agentRunEvents,
   agentRunFeedback,
+  agentRunReviews,
   agentRuns,
   agents,
   aiModelPrices,
@@ -412,8 +417,11 @@ export function createRunStore(
         .limit(1);
       if (row) publisher.publish(runId, { kind: "event", event: eventDTO(row) });
     });
+  // Second-opinion runs share the reviewed run's taskId/agentId for budget and
+  // history grouping, but never hold or clear the task claim — that belongs
+  // solely to the primary run that is actually doing the task's work.
   const releaseClaim = async (tx: Db, run: AgentRun) => {
-    if (run.taskId && run.agentId)
+    if (run.taskId && run.agentId && run.runPurpose !== "second_opinion")
       await tx
         .update(tasks)
         .set({ claimedByAgentId: null, claimedAt: null, leaseExpiresAt: null })
@@ -487,7 +495,9 @@ export function createRunStore(
       if (!run) return false;
       status(runId, next);
       if (next === "running" && before && !before.startedAt) {
-        if (run.taskId)
+        // A second-opinion run shares the reviewed run's taskId for grouping only —
+        // it never drives that task's own status (the task may already be completed).
+        if (run.taskId && run.runPurpose !== "second_opinion")
           await db
             .update(tasks)
             .set({ status: "running", startedAt: sql`coalesce(${tasks.startedAt}, now())` })
@@ -700,6 +710,11 @@ export function createRunStore(
         latencyMs: r.latencyMs ?? 0,
       };
     },
+    async validateStructured(runId, data) {
+      const run = await getRun(db, runId);
+      const schema = run.runPurpose === "second_opinion" ? providerReviewSchema : agentExecutionResultSchema;
+      return schema.safeParse(data);
+    },
     async finalize(runId, saved: SavedResponse) {
       const structured = saved.structured;
       let drafts: AgentExecutionResult["proposedKnowledgeDrafts"] = [];
@@ -721,35 +736,37 @@ export function createRunStore(
           )
           .returning();
         if (!r) return null;
-        if (r.executionType === "task" && r.taskId && structured) {
+        // Validated by executeRun() before finalize() is ever called (see RunStore.validateStructured).
+        const taskResult = r.executionType === "task" ? (structured as AgentExecutionResult | null) : null;
+        if (taskResult && r.taskId) {
           await tx
             .update(tasks)
             .set(
-              structured.status === "completed"
+              taskResult.status === "completed"
                 ? {
                     status: "completed",
                     completedAt: new Date(),
                     progress: 100,
-                    resultSummary: structured.summary,
+                    resultSummary: taskResult.summary,
                     error: null,
                   }
                 : {
                     status: "waiting",
-                    resultSummary: structured.summary,
+                    resultSummary: taskResult.summary,
                     error:
-                      structured.status === "blocked" ? "Agent reported the task is blocked" : null,
+                      taskResult.status === "blocked" ? "Agent reported the task is blocked" : null,
                   },
             )
             .where(eq(tasks.id, r.taskId));
           await releaseClaim(tx, r);
-          for (const h of structured.proposedHandoffs)
+          for (const h of taskResult.proposedHandoffs)
             await recordAuditEvent(tx, {
               ...workerAudit(r),
               action: "ai.handoff_proposed",
               description: `Handoff proposed to ${h.department}: ${h.objective}`,
               metadata: h,
             });
-          drafts = structured.proposedKnowledgeDrafts;
+          drafts = taskResult.proposedKnowledgeDrafts;
         }
         if (r.executionType === "chat" && r.conversationId) {
           await tx.insert(conversationMessages).values({
@@ -783,7 +800,7 @@ export function createRunStore(
             costUsd: r.actualCost,
             billingMode: r.billingMode,
             latencyMs: r.latencyMs,
-            status: structured?.status ?? "text",
+            status: taskResult?.status ?? "text",
           },
         });
         return r;
@@ -826,13 +843,20 @@ export function createRunStore(
           });
         }
       }
-      if (run.executionType === "task")
+      if (run.executionType === "task") {
+        const taskStatus = (structured as AgentExecutionResult | null)?.status;
         await event(
           runId,
           "TASK_COMPLETED",
-          structured?.status === "completed"
-            ? "Task completed"
-            : `Agent reported: ${structured?.status}`,
+          taskStatus === "completed" ? "Task completed" : `Agent reported: ${taskStatus}`,
+        );
+      }
+      if (run.runPurpose === "second_opinion" && run.reviewedRunId)
+        await event(
+          run.reviewedRunId,
+          "REVIEW_COMPLETED",
+          `Second opinion from ${run.provider} completed`,
+          { reviewerRunId: run.id, reviewerProvider: run.provider },
         );
       status(runId, "completed");
       if (run.agentId) await refreshAgentStates(db, [run.agentId]);
@@ -960,7 +984,9 @@ async function finishCancelled(db: Database, runId: string): Promise<AgentRun | 
       )
       .returning();
     if (!r) return null;
-    if (r.taskId && r.agentId)
+    // See createRunStore's releaseClaim: a second-opinion run shares taskId/agentId
+    // for grouping only and never holds the task's execution claim.
+    if (r.taskId && r.agentId && r.runPurpose !== "second_opinion")
       await tx
         .update(tasks)
         .set({ claimedByAgentId: null, claimedAt: null, leaseExpiresAt: null })
@@ -1074,6 +1100,7 @@ export async function recoverInterruptedRuns(
 
 export interface RunViewer {
   canStop(companyId: string | null): boolean;
+  canRequestReview(companyId: string | null): boolean;
   userId: string | null;
 }
 
@@ -1149,10 +1176,16 @@ export async function listRuns(
       : [];
   return rows.map(({ r, company, taskTitle, agentName, startedBy, lastEvent }) => {
     const fb = feedback.find((f) => f.runId === r.id);
-    const result = (r.status === "completed" ? r.result : null) as AgentExecutionResult | null;
+    // A second-opinion run's `result` is a ProviderReview, not an AgentExecutionResult —
+    // never surfaced through this field (see AgentRunDetailDTO.review for that content).
+    const result = (
+      r.status === "completed" && r.runPurpose !== "second_opinion" ? r.result : null
+    ) as AgentExecutionResult | null;
     return {
       id: r.id,
       number: r.number,
+      purpose: r.runPurpose as RunPurpose,
+      reviewedRunId: r.reviewedRunId,
       executionType: r.executionType,
       status: r.status,
       company: company?.id ? company : null,
@@ -1208,6 +1241,7 @@ export async function listRuns(
       viewer: {
         canStop: ACTIVE_RUN_STATUSES.includes(r.status) && opts.viewer.canStop(r.companyId),
         canFeedback: r.status === "completed" && !!opts.viewer.userId,
+        canRequestReview: opts.viewer.canRequestReview(r.companyId),
       },
     };
   });
@@ -1225,12 +1259,28 @@ export async function getRunDetail(
     limit: 1,
   });
   if (!run) throw new NotFoundError("Run", runId);
-  const events = await db
-    .select()
-    .from(agentRunEvents)
-    .where(eq(agentRunEvents.runId, runId))
-    .orderBy(agentRunEvents.seq);
-  return { ...run, events: events.map(eventDTO) };
+  const [events, [latestReview]] = await Promise.all([
+    db
+      .select()
+      .from(agentRunEvents)
+      .where(eq(agentRunEvents.runId, runId))
+      .orderBy(agentRunEvents.seq),
+    // The most recent COMPLETED independent review of this run, if any — never
+    // the reviewer's in-progress or failed attempts, and never this run's own
+    // review of someone else (that lives on the reviewer run's own detail).
+    db
+      .select({ result: agentRuns.result })
+      .from(agentRunReviews)
+      .innerJoin(agentRuns, eq(agentRuns.id, agentRunReviews.reviewerRunId))
+      .where(and(eq(agentRunReviews.reviewedRunId, runId), eq(agentRuns.status, "completed")))
+      .orderBy(desc(agentRunReviews.createdAt))
+      .limit(1),
+  ]);
+  return {
+    ...run,
+    events: events.map(eventDTO),
+    review: (latestReview?.result ?? null) as ProviderReview | null,
+  };
 }
 
 export async function setRunFeedback(
@@ -1376,9 +1426,11 @@ export async function setAgentProviderSettings(
       .from(companyAiPolicies)
       .where(eq(companyAiPolicies.companyId, companyId));
     const allowed = policy?.allowedProviders ?? PROVIDER_TYPES;
-    for (const p of [data.primaryProvider, data.fallbackProvider].filter(
-      (x): x is ProviderType => !!x,
-    ))
+    for (const p of [
+      data.primaryProvider,
+      data.fallbackProvider,
+      data.preferredReviewerProvider,
+    ].filter((x): x is ProviderType => !!x))
       if (!allowed.includes(p))
         throw new ConflictError(
           `${PROVIDER_LABELS[p]} is not allowed by a company this agent serves`,
@@ -1393,6 +1445,7 @@ export async function setAgentProviderSettings(
       fallbackProvider: data.fallbackProvider,
       preferredModelTier: data.preferredModelTier,
       defaultEffort: data.defaultEffort,
+      preferredReviewerProvider: data.preferredReviewerProvider,
     })
     .where(eq(agents.id, agentId));
   await recordAuditEvent(db, {

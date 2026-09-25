@@ -72,6 +72,12 @@ export const DEFAULT_AI_POLICY: Omit<CompanyAiPolicyDTO, "defaultProvider" | "up
   premiumAllowed: false,
   maxResponseDetail: "detailed",
   fallbackAllowed: false,
+  providerSelection: "fixed",
+  reviewMode: "manual",
+  reviewProvider: null,
+  reviewTaskTypes: [],
+  highValueThresholdUsd: null,
+  maxReviewsPerTask: 1,
 };
 
 function toAiPolicyDTO(company: Company, row: CompanyAiPolicy | undefined): CompanyAiPolicyDTO {
@@ -91,6 +97,12 @@ function toAiPolicyDTO(company: Company, row: CompanyAiPolicy | undefined): Comp
           premiumAllowed: row.premiumAllowed,
           maxResponseDetail: row.maxResponseDetail,
           fallbackAllowed: row.fallbackAllowed,
+          providerSelection: row.providerSelection,
+          reviewMode: row.reviewMode,
+          reviewProvider: row.reviewProvider,
+          reviewTaskTypes: row.reviewTaskTypes ?? [],
+          highValueThresholdUsd: row.highValueThresholdUsd,
+          maxReviewsPerTask: row.maxReviewsPerTask,
         }
       : DEFAULT_AI_POLICY),
     updatedAt: row?.updatedAt.toISOString() ?? null,
